@@ -23,7 +23,8 @@ This settles the biggest unknown without Ruta in the loop:
 
 ## 1. Install and explore (5 min)
 
-- Install the build (Xcode, Sideloadly, AltStore or TestFlight).
+- Install the build — full step-by-step in [`INSTALL.md`](INSTALL.md) if you were given the
+  unsigned IPA; if it came via TestFlight, just tap the link.
 - Open Ruta. Read the one-time intro. Allow Bluetooth and location when asked.
 - Home shows the connect card. Turn on **Demo mode** (Connect sheet, or More › Settings).
 - Check every tab with the fake scooter: Home metrics, Navigate search, Rides list and a ride's

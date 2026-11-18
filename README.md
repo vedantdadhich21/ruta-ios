@@ -98,8 +98,8 @@ xcodebuild -project Ruta.xcodeproj -scheme Ruta \
 
 | Method | Cost | Notes |
 |---|---|---|
+| Sideloadly / AltStore + free Apple ID | free | re-signs the unsigned IPA; refresh every 7 days — see [`docs/INSTALL.md`](docs/INSTALL.md) |
 | Xcode → device | free | needs the Mac and the iPhone together, 7-day resign |
-| Sideloadly / AltStore + free Apple ID | free | resigns the unsigned IPA; refresh every 7 days |
 | TestFlight | $99/yr Apple Developer | the smooth way to hand a friend one build |
 
 ## Pairing (read this first)
