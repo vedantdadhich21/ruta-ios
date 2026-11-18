@@ -92,7 +92,9 @@ button frames are decoded.
 
 | Symptom | Meaning / fix |
 |---|---|
-| No pairing sheet when connecting | Forget the scooter in iOS Settings › Bluetooth, scooter off/on, scan again |
+| No pairing sheet when connecting | Pair once through the **official My VIDA app** (App Store), then reopen Ruta — iOS keeps the
+  bond at the system level, so Ruta inherits it. Otherwise: forget the scooter in Settings ›
+  Bluetooth, scooter off/on, scan again |
 | "Reconnecting…" forever | Official app or another phone holds the link; close it, or the scooter is out of range |
 | Connected but batteries empty | Wait ~10 s for the first BMS burst; if still empty, share the diagnostics log |
 | Ride not saved | Rides need ≥ 200 m and ≥ 1 min of movement; check location permission |
