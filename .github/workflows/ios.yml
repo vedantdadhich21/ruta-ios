@@ -15,7 +15,7 @@ jobs:
     name: Test, build simulator app, package unsigned IPA
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Toolchain
         run: |
@@ -59,13 +59,15 @@ jobs:
           mv Ruta-unsigned.ipa ../../../Ruta-unsigned.ipa
 
       - name: Upload simulator app
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Ruta-simulator-app
           path: build/Build/Products/Debug-iphonesimulator/Ruta.app
+          if-no-files-found: error
 
       - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Ruta-unsigned-ipa
-          path: Ruta-unsigned.ipa
+          path: build/Ruta-unsigned.ipa
+          if-no-files-found: error
