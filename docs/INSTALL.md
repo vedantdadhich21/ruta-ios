@@ -58,6 +58,33 @@ Honest limits: the phone must be unlocked and online sometimes (normal daily use
 the app fully lapses past 7 days with the phone offline the whole time, one computer session
 revives it; free Apple IDs allow only 3 sideloaded apps at once (SideStore + Ruta use 2 slots).
 
+## Zero computers at all: SideInstaller (iOS 27+)
+
+[SideInstaller](https://sideinstaller.net) (open source: [FrizzleM/SideInstaller](https://github.com/FrizzleM/SideInstaller))
+does the whole setup on the iPhone: pairing, signing with **your own Apple ID**, installing. No
+Mac, no PC, no cable — the phone pairs with itself (iOS 27) and a free App Store app,
+**LocalDevVPN**, gives it the tunnel that replaces the USB cable.
+
+1. On the iPhone, open **sideinstaller.net** in Safari — the official site, and nothing else.
+   `sideinstaller.com` is a known fake that distributes malware; clones of the app itself look
+   identical, so the link above is the only source to type credentials into.
+2. Install the app, then **LocalDevVPN** from the App Store, and connect it when asked.
+3. Sign in with your Apple ID (2FA as normal). Credentials stay on the device.
+4. Tap **Install SideStore**, complete the self-pairing prompt (Settings shows a code to confirm).
+5. Open SideStore, tap **+**, pick `Ruta-unsigned.ipa`, install. Keep LocalDevVPN around for
+   installs and the weekly refresh cycle.
+
+Version reality check:
+
+| iOS | Works without any computer? |
+|---|---|
+| 27+ | **Yes — the whole chain on-device** |
+| 17.4–26.x | SideInstaller works, but needs a pairing file made once on a computer — use the Sideloadly route above |
+| 14.0–16.6.1 (16.7 RC, 17.0) | Don't bother: TrollStore (below) installs permanently |
+
+Expect some jitter: Apple sign-in occasionally fails (retry), and the certificate list for the
+pre-27 install route changes as certificates get revoked — pick another and continue.
+
 ## Old iPhone on iOS 14.0–16.6.1: TrollStore is truly forever
 
 TrollStore exploits a system bug (fixed in iOS 16.7 / 17) to install apps with **no signature
