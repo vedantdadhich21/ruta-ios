@@ -38,12 +38,51 @@ survives re-signing).
 
 Set a weekly phone reminder until the gifting is done with.
 
+## No computer of your own: SideStore (recommended)
+
+If the rider has no computer, SideStore removes the weekly cable entirely. Once SideStore is on
+the iPhone, the phone re-signs Ruta **itself**, in the background, every week — no Mac, no Apple
+Developer account, no cost. One in-person setup with any Mac (a friend's is fine), then zero
+maintenance:
+
+1. On the Mac, install Sideloadly (as above). Connect the rider's iPhone by cable.
+2. Download the SideStore IPA from [sidestore.io](https://sidestore.io) and side-load it with
+   **the rider's own Apple ID** plus an app-specific password (step 6 above). Complete the
+   pairing-file step it asks for — that file is what lets the phone refresh itself later.
+3. On the iPhone, open SideStore and sign in with the same Apple ID.
+4. In SideStore, tap **+**, pick `Ruta-unsigned.ipa`, and install — it signs and installs
+   on-device.
+5. Keep SideStore's background refresh enabled. From here the phone renews Ruta weekly by itself.
+
+Honest limits: the phone must be unlocked and online sometimes (normal daily use is plenty); if
+the app fully lapses past 7 days with the phone offline the whole time, one computer session
+revives it; free Apple IDs allow only 3 sideloaded apps at once (SideStore + Ruta use 2 slots).
+
+## Old iPhone on iOS 14.0–16.6.1: TrollStore is truly forever
+
+TrollStore exploits a system bug (fixed in iOS 16.7 / 17) to install apps with **no signature
+expiry at all** — no Apple ID, no refresh, ever. Check Settings → General → About:
+
+- System version **14.0 through ~16.6.1** → use TrollStore. Installing Ruta is a two-minute
+  on-device step and it never needs anything again. This is the only genuinely
+  install-once-run-forever option.
+- **16.7+ / 17 or newer** → not supported; use SideStore above.
+
+## The shortcut you may have heard of: enterprise-cert web signers
+
+Services like Scarlet or ESign's free tiers take an unsigned IPA and return an install link that
+needs no computer and no Apple ID. They sign with misused corporate certificates. It works
+until Apple revokes the certificate in one of its periodic sweeps — then every app from that
+signer dies instantly, everywhere, until you find another one. You are installing a provisioning
+profile run by anonymous operators onto a daily phone. Not recommended on the device that holds
+an Apple ID, banking apps and a scooter worth real money.
+
 ## Alternatives, if this gets serious
 
 | Option | What changes |
 |---|---|
-| **AltStore / SideStore** | Same free 7-day idea, but can refresh over Wi-Fi instead of a cable, if the computer is on the same network |
-| **TestFlight** | The giver pays $99/yr for an Apple Developer account; you just tap a link, installs over the air, builds last 90 days, no computer ever |
+| **TestFlight via any iOS dev you know** | Free to you: their paid account hosts the build; rider taps a link, 90-day installs, no computer ever |
+| **AltStore classic** | Same 7-day idea as Sideloadly, but can refresh over Wi-Fi when the Mac is on the same network |
 | **Xcode, if you own a Mac** | Open the repo's `Ruta.xcodeproj`, pick your team, hit Run — same 7-day rule |
 
 ## Troubleshooting
