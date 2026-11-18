@@ -29,6 +29,22 @@ minutes, once.
    **Settings → General → VPN & Device Management** → tap your Apple ID under "Developer App" →
    **Trust**. Now Ruta opens.
 
+## Does a sideloaded app run like a real app?
+
+Yes — identically. The install routes (Sideloadly, SideInstaller/SideStore, TestFlight) don't change
+the app at all; they only attach Apple's signature to the same compiled binary. Once installed,
+Ruta opens from the home screen like any app, at full native speed, with normal Bluetooth, GPS and
+data storage. The only difference from a store app is the signature's lifetime, and SideStore
+renews that weekly by itself.
+
+Two specifics for this app:
+
+- **Don't put Ruta inside LiveContainer.** Guest apps in a container are the one variant where
+  background behavior can differ — and the scooter link surviving a locked phone depends on it.
+  There's no need: SideStore + Ruta together use 2 of the 3 free slots.
+- **LocalDevVPN is plumbing.** It matters only while SideStore installs or refreshes; Ruta never
+  needs it to run.
+
 ## Keeping it alive
 
 Free Apple ID signatures last **7 days**. On day 8 the app icon dims and it stops opening. Fix:
