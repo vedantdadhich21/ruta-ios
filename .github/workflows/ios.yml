@@ -1,0 +1,71 @@
+name: iOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test, build simulator app, package unsigned IPA
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      # Whole package (core + UI + preview/snapshot tools) for macOS, plus every
+      # ported Android test vector.
+      - name: Protocol and logic tests
+        run: swift run RutaTests
+
+      # The Xcode project is committed, so this builds exactly what a friend
+      # downloads and opens. No signing: the artifact is re-signed at install
+      # time (Xcode, Sideloadly, AltStore) or by TestFlight's own build.
+      - name: Build for iOS Simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project Ruta.xcodeproj -scheme Ruta \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build \
+            | (command -v xcbeautify >/dev/null && xcbeautify --quieter || cat)
+
+      - name: Build for device (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project Ruta.xcodeproj -scheme Ruta \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build \
+            | (command -v xcbeautify >/dev/null && xcbeautify --quieter || cat)
+
+      - name: Package unsigned IPA
+        run: |
+          cd build/Build/Products/Release-iphoneos
+          mkdir Payload
+          cp -R Ruta.app Payload/
+          zip -qry Ruta-unsigned.ipa Payload
+          mv Ruta-unsigned.ipa ../../../Ruta-unsigned.ipa
+
+      - name: Upload simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ruta-simulator-app
+          path: build/Build/Products/Debug-iphonesimulator/Ruta.app
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ruta-unsigned-ipa
+          path: Ruta-unsigned.ipa
