@@ -36,8 +36,10 @@ func runBatteryAnalytics() {
     let now: Int64 = 1_000_000
 
     func u16(_ value: Int) -> [Int] { [value >> 8 & 0xFF, value & 0xFF] }
-    let raw = [1] + u16(95) + u16(81) + u16(31) + [0x12, 0x34, 0x56]
-        + u16(96) + u16(80) + u16(79) + u16(30) + u16(94) + u16(82) + u16(81) + u16(32)
+    var raw = [1]
+    for value in [95, 81, 31] { raw += u16(value) }
+    raw += [0x12, 0x34, 0x56]
+    for value in [96, 80, 79, 30, 94, 82, 81, 32] { raw += u16(value) }
     let bms = TcuParser.bms(raw.map(UInt8.init))!
     check(bms.soh == 95 && bms.soc == 81 && bms.packTemp == 31, "raw BMS fields")
     check(bms.chargeTimeRaw == 0x123 && bms.bmsStatus == 4 && bms.pack1Status == 5 && bms.pack2Status == 6, "status fields")
