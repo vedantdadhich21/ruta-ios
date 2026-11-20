@@ -105,6 +105,8 @@ public final class ScooterSession {
     public var onVehicle: ((VehicleState) -> Void)?
     public var onInfo: ((TcuInfo) -> Void)?
     public var onConnected: (() -> Void)?
+    /// A scan result, forwarded from the transport (which the session owns).
+    public var onDiscovered: ((DiscoveredScooter) -> Void)?
     /// The link went down. `linkLost` true: it dropped by itself and reconnection retries the same
     /// scooter, so keep ride tracking running. False: it is over.
     public var onEnded: ((Bool) -> Void)?
@@ -341,8 +343,8 @@ public final class ScooterSession {
         switch event {
         case .bluetoothState(let state):
             if state == .poweredOff, phase != .idle { fail("Bluetooth was turned off.") }
-        case .discovered:
-            break
+        case .discovered(let scooter):
+            onDiscovered?(scooter)
         case .connected:
             status("Connected · preparing scooter link…")
         case .ready:

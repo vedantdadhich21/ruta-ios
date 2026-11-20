@@ -129,4 +129,15 @@ func runSession() {
     session.disconnect()
     check(session.phase == .idle && !session.reconnecting, "disconnected")
     check(endings == [true, false], "user disconnect ending")
+
+    // Scan results must reach the app through the session, not just the transport: the session
+    // owns `transport.onEvent`, so a swallowed .discovered leaves the scan list empty (the bug
+    // found on a real iPhone while nRF Connect showed the scooter).
+    var found: [DiscoveredScooter] = []
+    session.onDiscovered = { found.append($0) }
+    transport.startScan()
+    clock.advance(350)
+    check(found.count == 1, "discovery forwarded to the app once")
+    check(found.first?.name.hasPrefix("HMC") == true, "discovery keeps the advertised name")
+    transport.stopScan()
 }

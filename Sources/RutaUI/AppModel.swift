@@ -392,6 +392,15 @@ public final class RutaModel {
     private func wireSession() {
         session.onStatus = { [weak self] text in self?.statusText = text }
         session.onLog = { _ in }
+        session.onDiscovered = { [weak self] scooter in
+            guard let self else { return }
+            if let index = self.discovered.firstIndex(where: { $0.id == scooter.id }) {
+                self.discovered[index] = scooter
+            } else {
+                self.discovered.append(scooter)
+            }
+            self.discovered.sort { $0.rssi > $1.rssi }
+        }
         session.onReading = { [weak self] reading in self?.accept(reading) }
         session.onVehicle = { [weak self] state in
             guard let self else { return }
