@@ -306,6 +306,7 @@ runNavigation()
 runBatteryAnalytics()
 runSession()
 runRideRecorder()
+runGattResolution()
 
 if failures == 0 {
     print("RutaTests: all checks passed")

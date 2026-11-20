@@ -309,7 +309,7 @@ public final class RutaModel {
     }
 
     public func renameRide(_ stored: StoredRide, start: String?, end: String?) {
-        activeRideStore.updatePlaces(id: stored.id, start: start, end: end)
+        _ = activeRideStore.updatePlaces(id: stored.id, start: start, end: end)
         refreshRides()
     }
 
@@ -585,7 +585,7 @@ public final class RutaModel {
             let start = await PlaceLookup.name(lat: ride.startLat, lng: ride.startLng)
             let end = await PlaceLookup.name(lat: ride.endLat, lng: ride.endLng)
             guard let self else { return }
-            self.activeRideStore.updatePlaces(id: ride.id, start: start, end: end)
+            _ = self.activeRideStore.updatePlaces(id: ride.id, start: start, end: end)
             self.rides = self.activeRideStore.load()
         }
     }
