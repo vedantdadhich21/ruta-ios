@@ -188,7 +188,7 @@ public struct BatteryScreen: View {
 
     private var trendPoints: [TrendChart.Point] {
         var points: [TrendChart.Point] = []
-        for pack in model.packs {
+        for pack in model.historyPacks {
             let buckets = model.history(metric, pack: pack, hours: range.hours, buckets: 90)
             for (index, bucket) in buckets.enumerated() {
                 points.append(TrendChart.Point(

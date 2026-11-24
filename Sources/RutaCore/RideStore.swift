@@ -16,7 +16,7 @@ public struct StoredRide: Codable, Equatable, Sendable, Identifiable {
 
 /// Finished rides on disk (JSON). iOS needs no database dependency here.
 public final class RideStore {
-    private let url: URL
+    let url: URL
     private let queue = DispatchQueue(label: "ruta.rides.store")
 
     public init(url: URL? = nil) {
@@ -30,9 +30,14 @@ public final class RideStore {
     }
 
     public func load() -> [StoredRide] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
-        let decoder = JSONDecoder()
-        return (try? decoder.decode([StoredRide].self, from: data)) ?? []
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        do {
+            let data = try Data(contentsOf: url)
+            return try JSONDecoder().decode([StoredRide].self, from: data)
+        } catch {
+            quarantineCorruptFile()
+            return []
+        }
     }
 
     public func rides() -> [Ride] {
@@ -84,6 +89,12 @@ public final class RideStore {
     public func nextId() -> Int64 {
         (load().map(\.id).max() ?? 0) + 1
     }
+
+    private func quarantineCorruptFile() {
+        let stamp = Int64(Date().timeIntervalSince1970 * 1000)
+        let corrupt = url.deletingPathExtension().appendingPathExtension("corrupt-\(stamp).json")
+        try? FileManager.default.moveItem(at: url, to: corrupt)
+    }
 }
 
 /// Charging sessions, learned as they happen, kept next to the rides.
@@ -102,8 +113,16 @@ public final class ChargeStore {
     }
 
     public func load() -> [ChargeSession] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
-        return (try? JSONDecoder().decode([ChargeSession].self, from: data)) ?? []
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        do {
+            let data = try Data(contentsOf: url)
+            return try JSONDecoder().decode([ChargeSession].self, from: data)
+        } catch {
+            let stamp = Int64(Date().timeIntervalSince1970 * 1000)
+            let corrupt = url.deletingPathExtension().appendingPathExtension("corrupt-\(stamp).json")
+            try? FileManager.default.moveItem(at: url, to: corrupt)
+            return []
+        }
     }
 
     public func save(_ sessions: [ChargeSession]) {

@@ -320,7 +320,7 @@ public struct RideDetailScreen: View {
             TrendChart.Point(
                 id: "\(index)",
                 time: Date(timeIntervalSince1970: Double(bucket.time) / 1000),
-                value: bucket.avg
+                value: model.unitMiles ? bucket.avg * 0.621371 : bucket.avg
             )
         }
         return RutaCard {

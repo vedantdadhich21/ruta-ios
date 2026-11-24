@@ -704,6 +704,7 @@ public final class RideSegmenter {
     public private(set) var riding = false
     public private(set) var startedAt: Int64 = 0
     private var ignitionArmed = true
+    private var paused = false
     private var fastSince: Int64?
     private var offSince: Int64?
     private var lostSince: Int64?
@@ -714,6 +715,7 @@ public final class RideSegmenter {
 
     /// `speedKmh` is the latest fresh filtered GPS speed, nil without a recent fix.
     public func update(now: Int64, linkReady: Bool, ignitionOn: Bool?, speedKmh: Double?) -> RideEvent? {
+        guard !paused else { return nil }
         if ignitionOn == false { ignitionArmed = true }
         let speed = speedKmh ?? 0
         if speed > RideMath.startKmh { fastSince = fastSince ?? now } else { fastSince = nil }
@@ -750,8 +752,37 @@ public final class RideSegmenter {
         return end(at: min(max(since, lastMovingAt), now), reason: reason)
     }
 
+    public func restoreRiding(startedAt: Int64) {
+        riding = true
+        self.startedAt = startedAt
+        paused = false
+        fastSince = nil
+        offSince = nil
+        lostSince = nil
+        idleSince = nil
+        lastMovingAt = startedAt
+    }
+
+    public func pause() {
+        paused = true
+        fastSince = nil
+        offSince = nil
+        lostSince = nil
+        idleSince = nil
+    }
+
+    public func resume(now: Int64) {
+        paused = false
+        fastSince = nil
+        offSince = nil
+        lostSince = nil
+        idleSince = nil
+        lastMovingAt = now
+    }
+
     public func stop(now: Int64) -> RideEvent? {
-        riding ? end(at: now, reason: .stopped) : nil
+        paused = false
+        return riding ? end(at: now, reason: .stopped) : nil
     }
 
     private func end(at time: Int64, reason: RideEndReason) -> RideEvent {
@@ -764,8 +795,11 @@ public final class RideSegmenter {
 /// Charging from the pack-0 SOC series.
 public final class ChargeDetector {
     public private(set) var active: ChargeSession?
+
+    public var snapshot: ChargeSession? { active }
     private var low: ValueAt?
     private var previous: ChargeSession?
+    private var pausedAt: Int64?
 
     public static let minRise = 1.0
     public static let confirmMs: Int64 = 300_000
@@ -777,6 +811,7 @@ public final class ChargeDetector {
 
     @discardableResult
     public func update(now: Int64, soc: Double?, linkReady: Bool, riding: Bool) -> ChargeSession? {
+        guard pausedAt == nil else { return nil }
         if !linkReady || riding {
             low = nil
             let done = finish()
@@ -810,7 +845,33 @@ public final class ChargeDetector {
         return nil
     }
 
+    public func restore(active: ChargeSession?) {
+        self.active = active.map {
+            ChargeSession(start: $0.start, end: Int64(Date().timeIntervalSince1970 * 1000),
+                          socStart: $0.socStart, socEnd: $0.socEnd, id: $0.id)
+        }
+        low = nil
+        previous = nil
+        pausedAt = nil
+    }
+
+    public func pause(now: Int64) {
+        if pausedAt == nil { pausedAt = now }
+    }
+
+    public func resume(now: Int64) {
+        guard let start = pausedAt else { return }
+        let paused = max(0, now - start)
+        if paused > 0 {
+            active?.end += paused
+            low?.time += paused
+            previous?.end += paused
+        }
+        pausedAt = nil
+    }
+
     public func stop() -> ChargeSession? {
+        pausedAt = nil
         low = nil
         let done = finish()
         previous = nil

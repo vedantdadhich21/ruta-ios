@@ -20,6 +20,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>RutaGitCommit</key>
+	<string>$(RUTA_GIT_COMMIT)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
@@ -27,7 +29,7 @@
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Ruta connects to your scooter to read its battery, range and ride data, and to send directions to its screen. Bluetooth data stays between this iPhone and the scooter.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Ruta records your rides and draws the route while the app is open. Location stays on this iPhone.</string>
+	<string>Ruta uses your location to record rides and calculate routes while the app is open. Destination search and directions are handled by Apple Maps.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

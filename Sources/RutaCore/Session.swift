@@ -14,34 +14,58 @@ public enum LinkPhase: String, Sendable {
 public protocol SessionScheduler: AnyObject {
     /// Monotonic milliseconds.
     var nowMs: Int64 { get }
-    func after(_ ms: Int64, _ body: @escaping () -> Void)
+    @discardableResult
+    func after(_ ms: Int64, _ body: @escaping () -> Void) -> UUID
+    func cancel(_ handle: UUID)
     func cancelAll()
 }
 
-/// Main-queue scheduler used by the app.
+/// Main-queue scheduler used by the app. Completed work is removed immediately so a long ride does
+/// not retain every heartbeat, stats probe and navigation watchdog ever scheduled.
 public final class MainScheduler: SessionScheduler {
-    private var items: [DispatchWorkItem] = []
+    private let lock = NSLock()
+    private var items: [UUID: DispatchWorkItem] = [:]
 
     public init() {}
 
     public var nowMs: Int64 { Int64(ProcessInfo.processInfo.systemUptime * 1000) }
 
-    public func after(_ ms: Int64, _ body: @escaping () -> Void) {
-        let item = DispatchWorkItem(block: body)
-        items.append(item)
-        if items.count > 100 { items.removeAll { $0.isCancelled } }
+    @discardableResult
+    public func after(_ ms: Int64, _ body: @escaping () -> Void) -> UUID {
+        let handle = UUID()
+        let item = DispatchWorkItem {
+            self.lock.lock()
+            self.items.removeValue(forKey: handle)
+            self.lock.unlock()
+            body()
+        }
+        lock.lock()
+        items[handle] = item
+        lock.unlock()
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(max(ms, 0))), execute: item)
+        return handle
+    }
+
+    public func cancel(_ handle: UUID) {
+        lock.lock()
+        let item = items.removeValue(forKey: handle)
+        lock.unlock()
+        item?.cancel()
     }
 
     public func cancelAll() {
-        for item in items { item.cancel() }
+        lock.lock()
+        let pending = Array(items.values)
         items.removeAll()
+        lock.unlock()
+        for item in pending { item.cancel() }
     }
 }
 
 /// Deterministic scheduler for tests and the offline demo. Time only moves when `advance` is called.
 public final class ManualScheduler: SessionScheduler {
     private struct Task {
+        let id: UUID
         var due: Int64
         var body: () -> Void
     }
@@ -53,8 +77,15 @@ public final class ManualScheduler: SessionScheduler {
         self.nowMs = nowMs
     }
 
-    public func after(_ ms: Int64, _ body: @escaping () -> Void) {
-        tasks.append(Task(due: nowMs + max(ms, 0), body: body))
+    @discardableResult
+    public func after(_ ms: Int64, _ body: @escaping () -> Void) -> UUID {
+        let id = UUID()
+        tasks.append(Task(id: id, due: nowMs + max(ms, 0), body: body))
+        return id
+    }
+
+    public func cancel(_ handle: UUID) {
+        tasks.removeAll { $0.id == handle }
     }
 
     public func cancelAll() {
@@ -107,6 +138,9 @@ public final class ScooterSession {
     public var onConnected: (() -> Void)?
     /// A scan result, forwarded from the transport (which the session owns).
     public var onDiscovered: ((DiscoveredScooter) -> Void)?
+    /// True while iOS may be showing its system pairing sheet.
+    public var onPairing: ((Bool) -> Void)?
+    public var onBluetoothState: ((BluetoothState) -> Void)?
     /// The link went down. `linkLost` true: it dropped by itself and reconnection retries the same
     /// scooter, so keep ride tracking running. False: it is over.
     public var onEnded: ((Bool) -> Void)?
@@ -141,11 +175,12 @@ public final class ScooterSession {
     public var caller: CallerInfo?
 
     private var targetID: UUID?
+    private var bluetoothState: BluetoothState = .unknown
     private var generation = 0
     private var decoder = BmsDecoder()
     private var heartbeat = 0
     private var lastTcuHeartbeat: Int64 = 0
-    private var lastBmsAt: Int64 = 0
+    private var lastBmsReadingAt: Int64 = 0
     private var bmsPeriodIndex = 0
     private var probedStats = false
     private var autoProbed = false
@@ -192,6 +227,15 @@ public final class ScooterSession {
     private var queue: [GattOp] = []
     private var running: GattOp?
     private var retryPending = false
+    private var pendingRetry: GattOp?
+    private var retryHandle: UUID?
+    private var setupDeadline: UUID?
+    private var setupToken = 0
+    private var pairingActive = false
+    private var awaitingReady = false
+    private var verificationPending = false
+    private var runningDeadline: UUID?
+    private var runningToken = 0
 
     public init(
         transport: ScooterTransport,
@@ -210,6 +254,9 @@ public final class ScooterSession {
 
     public func connect(id: UUID, name: String? = nil) {
         guard phase == .idle else { return }
+        // An explicit choice supersedes any automatic reconnect ladder.
+        stopReconnecting()
+        reconnectUntil = 0
         targetID = id
         deviceName = name
         scheduler.cancelAll()
@@ -228,26 +275,44 @@ public final class ScooterSession {
         status("Disconnected · saved history is available")
     }
 
-    /// Re-sends the current BMS request and re-reads vehicle state.
+    /// Re-sends the current BMS request. Vehicle state arrives continuously over its notification;
+    /// a second read here would be ambiguous on iOS because reads and notifications share a callback.
     public func refresh() {
         guard phase == .ready else { return }
         requestBms(bmsPeriodIndex, schedule: false)
-        read(Tcu.vehicleState, critical: false)
     }
 
     private func open() {
         guard let targetID else { return }
+        decoder = BmsDecoder(percentDivisor: savedScale("pct"), temperatureDivisor: savedScale("temp"))
         phase = .connecting
-        armTimeout(Self.setupTimeoutMs, Self.noResponse)
+        if bluetoothState == .poweredOn {
+            armSetup(Self.setupTimeoutMs, Self.noResponse)
+        } else {
+            status("Waiting for Bluetooth…")
+        }
         transport.connect(to: targetID)
     }
 
     private func teardown() -> Bool {
         generation += 1
+        if pairingActive {
+            pairingActive = false
+            onPairing?(false)
+        }
         scheduler.cancelAll()
+        setupDeadline = nil
+        setupToken += 1
+        runningDeadline = nil
+        runningToken += 1
         queue.removeAll()
         running = nil
         retryPending = false
+        awaitingReady = false
+        verificationPending = false
+        cancel(retryHandle)
+        retryHandle = nil
+        pendingRetry = nil
         resetAttempt()
         navigationSending = false
         navigationAckedAt = 0
@@ -262,7 +327,7 @@ public final class ScooterSession {
         lastRawLogAt = 0
         rawStats.removeAll()
         bmsPeriodIndex = 0
-        lastBmsAt = 0
+        lastBmsReadingAt = 0
         probedStats = false
         autoProbed = false
         lastTcuHeartbeat = 0
@@ -329,12 +394,25 @@ public final class ScooterSession {
         lastTcuHeartbeat = 0
     }
 
-    private func armTimeout(_ ms: Int64, _ message: String) {
-        let attempt = generation
-        scheduler.after(ms) { [weak self] in
-            guard let self, attempt == self.generation, self.phase == .connecting else { return }
+    private func cancel(_ handle: UUID?) {
+        if let handle { scheduler.cancel(handle) }
+    }
+
+    private func armSetup(_ ms: Int64, _ message: String) {
+        setupToken += 1
+        let token = setupToken
+        cancel(setupDeadline)
+        setupDeadline = scheduler.after(ms) { [weak self] in
+            guard let self, token == self.setupToken, self.phase == .connecting else { return }
+            self.setupDeadline = nil
             self.fail(message)
         }
+    }
+
+    private func cancelSetup() {
+        setupToken += 1
+        cancel(setupDeadline)
+        setupDeadline = nil
     }
 
     // MARK: - Transport events
@@ -342,16 +420,49 @@ public final class ScooterSession {
     private func receive(_ event: TransportEvent) {
         switch event {
         case .bluetoothState(let state):
-            if state == .poweredOff, phase != .idle { fail("Bluetooth was turned off.") }
+            let previous = bluetoothState
+            bluetoothState = state
+            onBluetoothState?(state)
+            if state == .poweredOff {
+                if phase == .ready {
+                    fail("Bluetooth was turned off.")
+                } else if phase == .connecting {
+                    cancelSetup()
+                    status("Waiting for Bluetooth…")
+                }
+            } else if state == .poweredOn, previous != .poweredOn, phase == .connecting, setupDeadline == nil {
+                armSetup(Self.setupTimeoutMs, Self.noResponse)
+            } else if state == .unauthorized, phase == .connecting {
+                cancelSetup()
+                status("Allow Bluetooth for Ruta in Settings, then tap Connect.")
+            }
         case .discovered(let scooter):
             onDiscovered?(scooter)
         case .connected:
             status("Connected · preparing scooter link…")
         case .ready:
             onServicesReady()
-        case .pairingRequired:
-            status("Confirm Bluetooth pairing with your scooter…")
-            armTimeout(90_000, "Bluetooth pairing did not finish. Pair the scooter in Settings, then retry.")
+        case .pairingRequired(let required):
+            if required {
+                guard !pairingActive else { return }
+                pairingActive = true
+                onPairing?(true)
+                status("Confirm Bluetooth pairing with your scooter…")
+                armSetup(90_000, "Bluetooth pairing did not finish. Pair the scooter in Settings, then retry.")
+            } else if pairingActive {
+                pairingActive = false
+                onPairing?(false)
+                if phase == .connecting {
+                    armSetup(Self.setupTimeoutMs, Self.noResponse)
+                    if awaitingReady {
+                        let attempt = generation
+                        scheduler.after(0) { [weak self] in
+                            guard let self, attempt == self.generation else { return }
+                            self.tryReady()
+                        }
+                    }
+                }
+            }
         case .disconnected(let reason):
             linkDown(reason)
         case .failure(let message):
@@ -392,7 +503,7 @@ public final class ScooterSession {
             fail("This scooter does not expose the Hero TCU link (\(missing.map { short($0) }.joined(separator: ", ")) missing).")
             return
         }
-        armTimeout(Self.setupTimeoutMs, "Scooter did not finish setup. Tap Connect to retry.")
+        armSetup(Self.setupTimeoutMs, "Scooter did not finish setup. Tap Connect to retry.")
         startStageA()
     }
 
@@ -411,10 +522,12 @@ public final class ScooterSession {
     private func startStageB() {
         guard stageB == false else { return }
         stageB = true
-        notify(Tcu.vehicleState, critical: false)
         if has(Tcu.esyncState) { notify(Tcu.esyncState, critical: false) }
         if has(Tcu.osInfo) { write(Tcu.osInfo, [Tcu.osAndroid], critical: false) }
+        // On iOS reads and notifications share didUpdateValueFor. Finish the one-shot read before
+        // enabling notifications so a notification cannot be mistaken for the read response.
         read(Tcu.vehicleState, critical: false)
+        notify(Tcu.vehicleState, critical: false)
         notify(Tcu.statsUpdate, critical: true)
         // The TCU treats the phone as a cluster client only once this CCCD is set.
         if has(Tcu.icbtControl) { notify(Tcu.icbtControl, critical: false) }
@@ -424,6 +537,27 @@ public final class ScooterSession {
 
     private func onReady() {
         guard phase == .connecting else { return }
+        awaitingReady = true
+        tryReady()
+    }
+
+    private func tryReady() {
+        guard phase == .connecting, awaitingReady else { return }
+        guard transport.noteSetupAccepted() else {
+            if !pairingActive { armSetup(90_000, "Bluetooth pairing did not finish. Pair once with My VIDA, then retry.") }
+            if !verificationPending, has(Tcu.tcuInfo) {
+                verificationPending = true
+                read(Tcu.tcuInfo, critical: false, maxTries: 1)
+            }
+            return
+        }
+        awaitingReady = false
+        verificationPending = false
+        cancelSetup()
+        if pairingActive {
+            pairingActive = false
+            onPairing?(false)
+        }
         phase = .ready
         lastTcuHeartbeat = scheduler.nowMs
         if reconnecting {
@@ -431,7 +565,7 @@ public final class ScooterSession {
             stopReconnecting()
         }
         onConnected?()
-        status(lastBmsAt != 0 ? "Connected · battery data live" : "Connected · waiting for battery data")
+        status(lastBmsReadingAt != 0 ? "Connected · battery data live" : "Connected · waiting for battery data")
         watchHeartbeat(generation)
         keepStatsFlowing(generation)
         navigationMissing = !has(Tcu.navInfo)
@@ -557,8 +691,8 @@ public final class ScooterSession {
     private func keepStatsFlowing(_ attempt: Int) {
         scheduler.after(Self.statsSilenceMs) { [weak self] in
             guard let self, attempt == self.generation, self.phase == .ready else { return }
-            if self.lastBmsAt != 0, self.scheduler.nowMs - self.lastBmsAt > Self.statsSilenceMs {
-                self.log("BMS frames stopped; switching to the next period")
+            if self.lastBmsReadingAt == 0 || self.scheduler.nowMs - self.lastBmsReadingAt > Self.statsSilenceMs {
+                self.log("No usable BMS readings; switching to the next period")
                 self.requestBms((self.bmsPeriodIndex + 1) % Tcu.bmsPeriodsMs.count, schedule: false)
             }
             self.keepStatsFlowing(attempt)
@@ -586,7 +720,7 @@ public final class ScooterSession {
         guard schedule else { return }
         let attempt = generation
         scheduler.after(Self.bmsSilenceMs) { [weak self] in
-            guard let self, attempt == self.generation, self.phase != .idle, self.lastBmsAt == 0 else { return }
+            guard let self, attempt == self.generation, self.phase != .idle, self.lastBmsReadingAt == 0 else { return }
             if index + 1 < Tcu.bmsPeriodsMs.count {
                 self.log("No BMS frame after 12 s; trying next period")
                 self.requestBms(index + 1, schedule: true)
@@ -620,7 +754,7 @@ public final class ScooterSession {
             for tag in Self.autoProbeTags {
                 self.write(Tcu.statsRequest, Tcu.statsRequest(tag: tag, enable: false, periodMs: 0), critical: false)
             }
-            if self.lastBmsAt != 0, self.scheduler.nowMs - self.lastBmsAt > 5_000 {
+            if self.lastBmsReadingAt == 0 || self.scheduler.nowMs - self.lastBmsReadingAt > 5_000 {
                 self.log("BMS frames paused during the auto-probe; requesting the stream again")
                 self.requestBms(self.bmsPeriodIndex, schedule: false)
             }
@@ -714,18 +848,19 @@ public final class ScooterSession {
             log("BMS frame too short (\(value.count) B)")
             return
         }
-        let first = lastBmsAt == 0
-        lastBmsAt = now
+        let firstUsable = lastBmsReadingAt == 0
         let before = "\(decoder.percentDivisor ?? 0)-\(decoder.temperatureDivisor ?? 0)"
-        for reading in decoder.readings(frame, time: Int64(Date().timeIntervalSince1970 * 1000)) {
+        let readings = decoder.readings(frame, time: Int64(Date().timeIntervalSince1970 * 1000))
+        for reading in readings {
             onReading?(reading)
         }
+        if !readings.isEmpty { lastBmsReadingAt = now }
         let after = "\(decoder.percentDivisor ?? 0)-\(decoder.temperatureDivisor ?? 0)"
         if before != after {
             log("Scale latched: percent ÷\(decoder.percentDivisor.map(String.init) ?? "?"), temperature ÷\(decoder.temperatureDivisor.map(String.init) ?? "?")")
             saveScale()
         }
-        if first && phase == .ready { status("Connected · battery data live") }
+        if firstUsable && phase == .ready { status("Connected · battery data live") }
     }
 
     private func sendHeartbeat(_ counter: Int) {
@@ -759,11 +894,11 @@ public final class ScooterSession {
         })
     }
 
-    private func read(_ characteristic: String, critical: Bool) {
+    private func read(_ characteristic: String, critical: Bool, maxTries: Int = 3) {
         guard has(characteristic) else { return }
         enqueue(GattOp(
             kind: .read, characteristic: characteristic, label: "read \(short(characteristic))",
-            critical: critical, maxTries: 3
+            critical: critical, maxTries: maxTries
         ) { [weak self] in
             guard let self, self.transport.availableCharacteristics.contains(characteristic) else { return false }
             self.transport.read(characteristic)
@@ -789,20 +924,23 @@ public final class ScooterSession {
     private func enqueue(_ op: GattOp, priority: Bool = false) {
         guard phase != .idle else { return }
         if priority {
-            guard let running else {
-                queue.insert(op, at: 0)
-                pump()
-                return
-            }
             let same: (GattOp) -> Bool = { $0.replaceable && $0.kind == .write && $0.characteristic == op.characteristic }
             let isMarker: (GattOp) -> Bool = { $0.kind == .marker }
-            let head = queue.contains { $0 === running } ? queue : [running] + queue
-            queue = PriorityLane.insert(queue: head, op: op, running: running, sameLane: same, isMarker: isMarker)
-            pump()
-            return
-        }
-        if op.replaceable, let stale = queue.firstIndex(where: {
-            $0 !== running && $0.replaceable && $0.kind == op.kind && $0.characteristic == op.characteristic
+            queue.removeAll { same($0) }
+            if let pending = pendingRetry, same(pending) {
+                cancel(retryHandle)
+                retryHandle = nil
+                pendingRetry = nil
+                retryPending = false
+            }
+            // `queue` contains pending work only; `running` is separate. A priority frame goes first,
+            // except it never crosses a marker, and it leaves one ordinary op ahead when another
+            // frame in the same lane is already running (so heartbeats cannot starve).
+            var index = running.map { same($0) ? 1 : 0 } ?? 0
+            if let lastMarker = queue.lastIndex(where: isMarker) { index = max(index, lastMarker + 1) }
+            queue.insert(op, at: min(index, queue.count))
+        } else if op.replaceable, let stale = queue.firstIndex(where: {
+            $0.replaceable && $0.kind == op.kind && $0.characteristic == op.characteristic
         }) {
             queue[stale] = op
         } else {
@@ -814,33 +952,38 @@ public final class ScooterSession {
     private func pump() {
         guard running == nil, !retryPending, phase != .idle else { return }
         while let op = queue.first {
+            queue.removeFirst()
             if op.kind == .marker {
-                queue.removeFirst()
                 _ = op.action()
                 if running != nil || retryPending { return }
                 continue
             }
             op.tries += 1
-            if op.action() {
-                running = op
+            running = op
+            let started = op.action()
+            // A test/demo transport may complete synchronously. In that case `complete` already
+            // cleared `running` and advanced the queue; do not install a watchdog for stale work.
+            guard running === op else { return }
+            if started {
+                runningToken += 1
+                let token = runningToken
                 let attempt = generation
-                scheduler.after(Self.setupTimeoutMs) { [weak self] in
-                    guard let self, attempt == self.generation, self.running === op else { return }
+                cancel(runningDeadline)
+                runningDeadline = scheduler.after(Self.setupTimeoutMs) { [weak self] in
+                    guard let self, token == self.runningToken, attempt == self.generation, self.running === op else { return }
+                    self.runningDeadline = nil
                     self.fail("Scooter stopped answering (\(op.label)). Tap Connect to retry.")
                 }
                 return
             }
+            running = nil
+            runningToken += 1
+            cancel(runningDeadline)
+            runningDeadline = nil
             if op.tries < op.maxTries {
-                retryPending = true
-                let attempt = generation
-                scheduler.after(250) { [weak self] in
-                    guard let self, attempt == self.generation else { return }
-                    self.retryPending = false
-                    self.pump()
-                }
+                scheduleRetry(op, attempt: generation)
                 return
             }
-            queue.removeFirst()
             writeOutcome(op, failure: -1)
             giveUp(op, "could not start")
             if phase == .idle { return }
@@ -853,17 +996,38 @@ public final class ScooterSession {
             return
         }
         running = nil
+        runningToken += 1
+        cancel(runningDeadline)
+        runningDeadline = nil
         if success {
-            if !queue.isEmpty { queue.removeFirst() }
             writeOutcome(op, failure: nil)
         } else if op.tries < op.maxTries {
             log("\(op.label) failed; retrying")
+            scheduleRetry(op, attempt: generation)
+            return
         } else {
-            if !queue.isEmpty { queue.removeFirst() }
             writeOutcome(op, failure: 1)
             giveUp(op, "failed")
         }
+        if awaitingReady, op.kind == .read, op.characteristic?.lowercased() == Tcu.tcuInfo {
+            verificationPending = false
+        }
         pump()
+        if awaitingReady, running == nil, queue.isEmpty { tryReady() }
+    }
+
+    private func scheduleRetry(_ op: GattOp, attempt: Int) {
+        retryPending = true
+        pendingRetry = op
+        cancel(retryHandle)
+        retryHandle = scheduler.after(250) { [weak self] in
+            guard let self, attempt == self.generation, self.pendingRetry === op else { return }
+            self.retryPending = false
+            self.pendingRetry = nil
+            self.retryHandle = nil
+            self.queue.insert(op, at: 0)
+            self.pump()
+        }
     }
 
     private func writeOutcome(_ op: GattOp, failure: Int?) {

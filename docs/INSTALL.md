@@ -7,50 +7,53 @@ minutes, once.
 
 ## What you need
 
-- The `Ruta-unsigned.ipa` file
-- Any computer — Mac or Windows
+- The `Ruta-unsigned-<short-sha>.ipa` file from the latest successful CI run
+- Any Mac, or a Windows PC with current iTunes/iCloud (not the Microsoft Store versions)
 - A USB cable for the iPhone
-- Your Apple ID and password (2FA: see step 6)
+- The Apple ID that will sign the app (the rider's, or the gift-giver's)
+- **Developer Mode on the iPhone** (see below)
 
 ## Steps
 
-1. Install **Sideloadly** on the computer — free from [sideloadly.io](https://sideloadly.io/).
-2. Connect the iPhone with the cable. Unlock it and tap "Trust this computer" if asked.
-3. Open Sideloadly. Drag `Ruta-unsigned.ipa` onto its window (or pick the file in its menu).
-4. Enter your **Apple ID** as the developer account. Sideloadly signs the app with a personal
-   certificate tied to you — the app never sees your password, and nothing is sent anywhere
-   except Apple's signing servers.
-5. Click Start / Install. The iPhone asks for your Apple ID password once more (this installs the
-   profile). Then Ruta's icon appears on the home screen.
-6. **If your Apple ID uses two-factor authentication** (it does by default), first create an
-   *app-specific password*: appleid.apple.com → Sign-in and Security → App-Specific Passwords.
-   Paste that into Sideloadly instead of your normal password.
-7. First launch: iOS says "Untrusted Developer". Go to
-   **Settings → General → VPN & Device Management** → tap your Apple ID under "Developer App" →
-   **Trust**. Now Ruta opens.
+1. On the iPhone: **Settings → Privacy & Security → Developer Mode → On**, then restart and
+   confirm the prompt after the restart. (If the toggle is hidden, attempting a developer install
+   in Sideloadly usually makes it appear.)
+2. Install **Sideloadly** on the computer — free from [sideloadly.io](https://sideloadly.io/).
+3. Connect the iPhone with the cable. Unlock it and tap "Trust this computer" if asked.
+4. Open Sideloadly. Drag `Ruta-unsigned-<short-sha>.ipa` onto its window.
+5. Enter the signing **Apple ID**. Sideloadly signs the app with a personal certificate tied to
+   that account — the app never sees the password; it goes only to Apple's signing service.
+6. Click Start / Install. If Sideloadly asks for an app-specific password, create one at
+   appleid.apple.com → Sign-in and Security → App-Specific Passwords and paste it. Follow the
+   installed version's 2FA prompts; app-specific passwords are not required for every account
+   configuration.
+7. First launch: if iOS says "Untrusted Developer", go to
+   **Settings → General → VPN & Device Management** → tap the signing Apple ID under
+   "Developer App" → **Trust**. Now Ruta opens.
 
 ## Does a sideloaded app run like a real app?
 
-Yes — identically. The install routes (Sideloadly, SideInstaller/SideStore, TestFlight) don't change
-the app at all; they only attach Apple's signature to the same compiled binary. Once installed,
-Ruta opens from the home screen like any app, at full native speed, with normal Bluetooth, GPS and
-data storage. The only difference from a store app is the signature's lifetime, and SideStore
-renews that weekly by itself.
+Yes — identically. Sideloadly, SideInstaller and SideStore attach Apple's signature to the same
+compiled binary; TestFlight uses a separately built, signed archive. Once installed, Ruta opens from
+the home screen like any app, at full native speed, with normal Bluetooth, GPS and data storage.
 
 Two specifics for this app:
 
 - **Don't put Ruta inside LiveContainer.** Guest apps in a container are the one variant where
-  background behavior can differ — and the scooter link surviving a locked phone depends on it.
-  There's no need: SideStore + Ruta together use 2 of the 3 free slots.
+  background behavior can differ. There's no need: SideStore + Ruta together use 2 of the 3 free
+  installed-app slots.
 - **LocalDevVPN is plumbing.** It matters only while SideStore installs or refreshes; Ruta never
   needs it to run.
+- **GPS/navigation are foreground-only in this build.** Keep Ruta open and the screen awake while
+  riding; the already-recorded part of a ride is saved when the app backgrounds.
 
 ## Keeping it alive
 
 Free Apple ID signatures last **7 days**. On day 8 the app icon dims and it stops opening. Fix:
 plug the iPhone into the same computer, open Sideloadly, drag the same IPA in, install again —
-two minutes, and your rides and settings are untouched (they live in the app's own storage, which
-survives re-signing).
+two minutes. Data survives only when you keep the **same signing Apple ID** and **same bundle ID**
+and install **over** the existing app; never uninstall first. Auto-refresh re-signs cached code; it
+does not download a new IPA, so install each new build explicitly.
 
 Set a weekly phone reminder until the gifting is done with.
 
@@ -61,18 +64,22 @@ the iPhone, the phone re-signs Ruta **itself**, in the background, every week �
 Developer account, no cost. One in-person setup with any Mac (a friend's is fine), then zero
 maintenance:
 
-1. On the Mac, install Sideloadly (as above). Connect the rider's iPhone by cable.
-2. Download the SideStore IPA from [sidestore.io](https://sidestore.io) and side-load it with
-   **the rider's own Apple ID** plus an app-specific password (step 6 above). Complete the
-   pairing-file step it asks for — that file is what lets the phone refresh itself later.
-3. On the iPhone, open SideStore and sign in with the same Apple ID.
-4. In SideStore, tap **+**, pick `Ruta-unsigned.ipa`, and install — it signs and installs
-   on-device.
+1. On the Mac, follow the current prerequisites at
+   [SideStore's installation docs](https://docs.sidestore.io/docs/installation/install) and install
+   **iloader**. Connect the rider's iPhone by cable.
+2. In iloader, sign in with the signing Apple Account, select the iPhone and choose
+   **Install SideStore (Stable)**. Complete any 2FA/app-specific-password prompt that version asks
+   for. This also sets up the pairing file the phone needs for on-device refresh.
+3. On the iPhone, trust the developer profile, enable Developer Mode if prompted, install and
+   connect LocalDevVPN, then open SideStore and sign in with the same Apple Account.
+4. In SideStore, tap **+**, pick the downloaded `Ruta-unsigned-<short-sha>.ipa`, and install.
 5. Keep SideStore's background refresh enabled. From here the phone renews Ruta weekly by itself.
 
 Honest limits: the phone must be unlocked and online sometimes (normal daily use is plenty); if
 the app fully lapses past 7 days with the phone offline the whole time, one computer session
-revives it; free Apple IDs allow only 3 sideloaded apps at once (SideStore + Ruta use 2 slots).
+revives it. No **paid** Apple Developer Program membership is needed. Free Apple IDs allow
+3 installed sideloaded apps and 10 new App IDs per 7 days (SideStore + Ruta use 2 slots and two
+App IDs).
 
 ## Zero computers at all: SideInstaller (iOS 27+)
 
@@ -81,13 +88,18 @@ does the whole setup on the iPhone: pairing, signing with **your own Apple ID**,
 Mac, no PC, no cable — the phone pairs with itself (iOS 27) and a free App Store app,
 **LocalDevVPN**, gives it the tunnel that replaces the USB cable.
 
-1. On the iPhone, open **sideinstaller.net** in Safari — the official site, and nothing else.
+1. On the iPhone, install **Open Minis** and **LocalDevVPN** from the App Store, enable Developer
+   Mode, and allow Open Minis location access as its setup instructions request.
+2. Open **sideinstaller.net** in Safari — the official site, and nothing else.
    `sideinstaller.com` is a known fake that distributes malware; clones of the app itself look
    identical, so the link above is the only source to type credentials into.
-2. Install the app, then **LocalDevVPN** from the App Store, and connect it when asked.
-3. Sign in with your Apple ID (2FA as normal). Credentials stay on the device.
-4. Tap **Install SideStore**, complete the self-pairing prompt (Settings shows a code to confirm).
-5. Open SideStore, tap **+**, pick `Ruta-unsigned.ipa`, install. Keep LocalDevVPN around for
+3. In Open Minis → console icon → **Shell Terminal**, connect LocalDevVPN, then run the command
+   shown on the official install page (currently
+   `wget -qO- https://raw.githubusercontent.com/FrizzleM/siboot/main/minis/install.sh | sh`).
+4. Follow siboot's prompts: sign in with the signing Apple ID and complete the self-pairing code
+   shown in Settings. It installs SideInstaller.
+5. Open SideInstaller → connect LocalDevVPN → **Install SideStore**.
+6. Open SideStore, tap **+**, pick the downloaded `Ruta-unsigned-<short-sha>.ipa`, install. Keep LocalDevVPN around for
    installs and the weekly refresh cycle.
 
 Version reality check:
@@ -96,20 +108,17 @@ Version reality check:
 |---|---|
 | 27+ | **Yes — the whole chain on-device** |
 | 17.4–26.x | SideInstaller works, but needs a pairing file made once on a computer — use the Sideloadly route above |
-| 14.0–16.6.1 (16.7 RC, 17.0) | Don't bother: TrollStore (below) installs permanently |
+| 17.0–17.3 | Use Sideloadly with a computer |
+| Below 17 | **Ruta cannot run** (minimum iOS 17) |
 
 Expect some jitter: Apple sign-in occasionally fails (retry), and the certificate list for the
 pre-27 install route changes as certificates get revoked — pick another and continue.
 
-## Old iPhone on iOS 14.0–16.6.1: TrollStore is truly forever
+## TrollStore is not an option for Ruta
 
-TrollStore exploits a system bug (fixed in iOS 16.7 / 17) to install apps with **no signature
-expiry at all** — no Apple ID, no refresh, ever. Check Settings → General → About:
-
-- System version **14.0 through ~16.6.1** → use TrollStore. Installing Ruta is a two-minute
-  on-device step and it never needs anything again. This is the only genuinely
-  install-once-run-forever option.
-- **16.7+ / 17 or newer** → not supported; use SideStore above.
+TrollStore can install apps permanently on older iOS versions, but **Ruta requires iOS 17 or
+newer**. The TrollStore-supported iOS 14–16 line cannot run this app, and iOS 17.0.1+ is not
+supported by TrollStore. Use SideStore/SideInstaller above.
 
 ## The shortcut you may have heard of: enterprise-cert web signers
 
@@ -124,7 +133,7 @@ an Apple ID, banking apps and a scooter worth real money.
 
 | Option | What changes |
 |---|---|
-| **TestFlight via any iOS dev you know** | Free to you: their paid account hosts the build; rider taps a link, 90-day installs, no computer ever |
+| **TestFlight via any iOS dev you know** | Free to you: their paid account hosts a separately signed Xcode 26+ build; rider taps a link, 90-day installs, no computer ever. The unsigned CI IPA itself is not a TestFlight build |
 | **AltStore classic** | Same 7-day idea as Sideloadly, but can refresh over Wi-Fi when the Mac is on the same network |
 | **Xcode, if you own a Mac** | Open the repo's `Ruta.xcodeproj`, pick your team, hit Run — same 7-day rule |
 
@@ -132,10 +141,10 @@ an Apple ID, banking apps and a scooter worth real money.
 
 | Symptom | Fix |
 |---|---|
-| "Unable to install" during step 5 | iPhone full, or already 3 sideloaded apps installed — delete one, retry |
+| "Unable to install" | iPhone full, Developer Mode off, or already 3 sideloaded apps installed — check each, then retry |
 | App dims after a week | Expected: re-sign (see "Keeping it alive") |
-| Password rejected with 2FA | You used your normal password — make an app-specific password (step 6) |
-| "Untrusted Developer" at launch | You skipped step 7's Trust screen |
+| Password rejected with 2FA | Follow the installed Sideloadly version's sign-in flow; use an app-specific password only if it asks for one |
+| "Untrusted Developer" at launch | Trust the signing Apple ID under Settings → General → VPN & Device Management |
 | Nothing happens when plugged in | Different cable port / unlock the phone / restart Sideloadly |
 
 Once it's installed, continue with [TESTING.md](TESTING.md) for the scooter pairing and the

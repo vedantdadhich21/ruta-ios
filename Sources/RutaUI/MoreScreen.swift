@@ -35,9 +35,7 @@ public struct MoreScreen: View {
             .alert("Name this scooter", isPresented: $showRename) {
                 TextField("e.g. Vida at home", text: $renameText)
                 Button("Save") {
-                    if let scooter = model.saved.first(where: { $0.displayName == model.connectedName }) {
-                        model.rename(scooter, nickname: renameText)
-                    } else if let scooter = model.saved.first {
+                    if let scooter = model.activeSavedScooter {
                         model.rename(scooter, nickname: renameText)
                     }
                 }
@@ -45,7 +43,7 @@ public struct MoreScreen: View {
             }
             .alert("Forget this scooter?", isPresented: $confirmForget) {
                 Button("Forget", role: .destructive) {
-                    if let scooter = model.saved.first {
+                    if let scooter = model.activeSavedScooter ?? model.saved.first {
                         model.forget(scooter)
                     }
                 }
@@ -249,7 +247,7 @@ public struct MoreScreen: View {
         RutaCard {
             VStack(alignment: .leading, spacing: 10) {
                 SectionTitle("About")
-                Text("Ruta \(version)")
+                Text("Ruta \(RutaBuild.version) (\(RutaBuild.build)) · \(String(RutaBuild.commit.prefix(7)))")
                     .font(.subheadline.weight(.semibold))
                 Text("An independent companion for Vida scooters, ported from the open-source Android app CODESURGEN/ruta. Not affiliated with or endorsed by Hero MotoCorp or Vida.")
                     .font(.caption)
@@ -271,13 +269,4 @@ public struct MoreScreen: View {
         }
     }
 
-    private var version: String {
-        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        switch (short, build) {
-        case let (short?, build?): return "\(short) (\(build))"
-        case let (short?, nil): return short
-        default: return "1.0"
-        }
-    }
 }

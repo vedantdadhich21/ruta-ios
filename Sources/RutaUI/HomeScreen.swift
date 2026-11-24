@@ -237,7 +237,7 @@ public struct HomeScreen: View {
                     }
                 }
                 HStack(spacing: 12) {
-                    StatTile("Distance", model.distanceText(model.ride.distanceM).replacingOccurrences(of: " km", with: ""),
+                    StatTile("Distance", model.distanceValueText(model.ride.distanceM),
                              unit: model.unitMiles ? "mi" : "km", color: RutaTheme.primary)
                     StatTile("Time", RideMath.formatDuration(seconds: model.ride.durationS))
                     StatTile("Average", model.speedText(model.ride.averageKmh), unit: model.speedUnit)

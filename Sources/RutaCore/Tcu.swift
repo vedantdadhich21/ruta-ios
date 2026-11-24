@@ -123,7 +123,7 @@ public enum HardControlEvent: Equatable, Sendable {
 /// showing needs the TCU's acknowledgement of the latest completed write.
 public enum NavDisplay: String, Sendable {
     case unavailable = "Unavailable"
-    case showing = "On the display"
+    case showing = "Sent to scooter"
     case rejected = "Rejected"
     case preparing = "Preparing"
 

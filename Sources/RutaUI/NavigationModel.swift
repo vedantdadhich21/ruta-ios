@@ -66,6 +66,11 @@ public final class NavigationModel: NSObject, MKLocalSearchCompleterDelegate {
     private var routeTask: Task<Void, Never>?
     private var pendingOrigin: CLLocationCoordinate2D?
     private var wantsRoute = false
+    private var routeRequest = 0
+    private var searchRequest = 0
+    private let countdown = NavCountdown()
+    private let odometer = NavOdometer()
+    private var nextTurn: Int?
 
     public override init() {
         super.init()
@@ -76,12 +81,16 @@ public final class NavigationModel: NSObject, MKLocalSearchCompleterDelegate {
     // MARK: - Search
 
     public func clearSearch() {
+        searchRequest += 1
+        searchTask?.cancel()
         query = ""
         completions = []
     }
 
     public func select(_ completion: MKLocalSearchCompletion) {
         let request = MKLocalSearch.Request(completion: completion)
+        searchRequest += 1
+        let searchID = searchRequest
         searchTask?.cancel()
         calculating = true
         error = nil
@@ -89,6 +98,7 @@ public final class NavigationModel: NSObject, MKLocalSearchCompleterDelegate {
             guard let self else { return }
             do {
                 let response = try await MKLocalSearch(request: request).start()
+                guard !Task.isCancelled, searchID == self.searchRequest else { return }
                 guard let item = response.mapItems.first else {
                     self.error = "No place found for that search."
                     self.calculating = false
@@ -109,8 +119,10 @@ public final class NavigationModel: NSObject, MKLocalSearchCompleterDelegate {
                     self.calculating = false
                     return
                 }
-                await self.calculateRoute(from: origin, to: coordinate, name: self.destinationName ?? "Destination")
+                let request = self.nextRouteRequest()
+                await self.calculateRoute(from: origin, to: coordinate, name: self.destinationName ?? "Destination", requestID: request)
             } catch {
+                guard !Task.isCancelled, searchID == self.searchRequest else { return }
                 self.error = "Could not find that place: \(error.localizedDescription)"
                 self.calculating = false
             }
@@ -127,12 +139,22 @@ public final class NavigationModel: NSObject, MKLocalSearchCompleterDelegate {
         }
         routeTask?.cancel()
         calculating = true
+        let request = nextRouteRequest()
         routeTask = Task { [weak self] in
-            await self?.calculateRoute(from: origin, to: CLLocationCoordinate2D(latitude: lat, longitude: lng), name: name)
+            await self?.calculateRoute(from: origin, to: CLLocationCoordinate2D(latitude: lat, longitude: lng), name: name, requestID: request)
         }
     }
 
-    private func calculateRoute(from origin: CLLocationCoordinate2D, to destination: CLLocationCoordinate2D, name: String) async {
+    private func nextRouteRequest() -> Int {
+        routeRequest += 1
+        return routeRequest
+    }
+
+    private func calculateRoute(
+        from origin: CLLocationCoordinate2D, to destination: CLLocationCoordinate2D,
+        name: String, requestID: Int
+    ) async {
+        guard !Task.isCancelled, requestID == routeRequest else { return }
         calculating = true
         rerouting = false
         error = nil
@@ -143,6 +165,7 @@ public final class NavigationModel: NSObject, MKLocalSearchCompleterDelegate {
         request.requestsAlternateRoutes = false
         do {
             let response = try await MKDirections(request: request).calculate()
+            guard !Task.isCancelled, requestID == routeRequest else { return }
             guard let route = response.routes.first else {
                 error = "No driving route to \(name)."
                 calculating = false
@@ -152,12 +175,11 @@ public final class NavigationModel: NSObject, MKLocalSearchCompleterDelegate {
             wantsRoute = false
             calculating = false
             if isNavigating {
-                travelledM = 0
-                arrived = false
                 startedAt = Date()
                 advanceProgress()
             }
         } catch {
+            guard !Task.isCancelled, requestID == routeRequest else { return }
             self.error = "Route failed: \(error.localizedDescription)"
             calculating = false
             rerouting = false
@@ -165,6 +187,12 @@ public final class NavigationModel: NSObject, MKLocalSearchCompleterDelegate {
     }
 
     private func apply(route: MKRoute) {
+        travelledM = 0
+        arrived = false
+        offRouteCount = 0
+        countdown.reset()
+        odometer.reset()
+        nextTurn = nil
         self.route = route
         coordinates = route.polyline.coordinates
         cumulative = []
@@ -217,55 +245,79 @@ public final class NavigationModel: NSObject, MKLocalSearchCompleterDelegate {
     }
 
     public func stop() {
-        guard isNavigating || route != nil else { return }
-        isNavigating = false
-        arrived = false
-        startedAt = nil
-        onStop?()
-        route = nil
-        steps = []
-        coordinates = []
-        destination = nil
-        destinationName = nil
-        remainingM = 0
-        maneuverM = 0
+        clearNavigation(notify: true)
     }
 
     public func finish() {
+        clearNavigation(notify: true)
+    }
+
+    private func clearNavigation(notify: Bool) {
+        invalidateRequests()
         isNavigating = false
         arrived = false
         startedAt = nil
         route = nil
         steps = []
+        coordinates = []
+        cumulative = []
+        destination = nil
+        destinationName = nil
+        pendingOrigin = nil
+        error = nil
         remainingM = 0
         maneuverM = 0
-        onStop?()
+        travelledM = 0
+        totalM = 0
+        arrivalDate = nil
+        countdown.reset()
+        odometer.reset()
+        nextTurn = nil
+        if notify { onStop?() }
+    }
+
+    private func invalidateRequests() {
+        searchRequest += 1
+        routeRequest += 1
+        searchTask?.cancel()
+        routeTask?.cancel()
+        calculating = false
+        wantsRoute = false
+        rerouting = false
     }
 
     public func resetForNewLink() {
-        if isNavigating { stop() }
+        if isNavigating || route != nil || destination != nil || calculating { stop() }
         offRouteCount = 0
     }
 
-    /// Called for every accepted GPS fix.
-    public func update(lat: Double, lng: Double) {
+    /// Called only for GPS fixes accepted by the ride filter.
+    public func update(fix: GeoFix) {
         if wantsRoute, let destination, !calculating {
             wantsRoute = false
-            let from = CLLocationCoordinate2D(latitude: lat, longitude: lng)
+            let from = CLLocationCoordinate2D(latitude: fix.lat, longitude: fix.lng)
             routeTask?.cancel()
             calculating = true
+            let request = nextRouteRequest()
             routeTask = Task { [weak self] in
-                await self?.calculateRoute(from: from, to: destination.coordinate, name: destination.name)
+                await self?.calculateRoute(from: from, to: destination.coordinate, name: destination.name, requestID: request)
             }
         }
         guard isNavigating, !coordinates.isEmpty else { return }
-        let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lng)
+        let speedMps = fix.speedKmh.map { $0 / 3.6 }
+        let added = odometer.add(
+            timeMs: fix.time, lat: fix.lat, lng: fix.lng,
+            accuracyM: fix.accuracyM, speedMps: speedMps, gps: true
+        )
+        guard added else { return }
+        let coordinate = CLLocationCoordinate2D(latitude: fix.lat, longitude: fix.lng)
         let nearest = nearestPoint(to: coordinate)
-        travelledM = nearest.alongM
         if nearest.distanceM > 70 {
             offRouteCount += 1
         } else {
             offRouteCount = 0
+            // Route progress cannot move backwards from GPS jitter. A reroute resets it explicitly.
+            if nearest.alongM >= travelledM { travelledM = nearest.alongM }
         }
         advanceProgress()
         if offRouteCount >= 3, !calculating, let destination {
@@ -273,26 +325,51 @@ public final class NavigationModel: NSObject, MKLocalSearchCompleterDelegate {
             rerouting = true
             let from = coordinate
             routeTask?.cancel()
+            let request = nextRouteRequest()
             routeTask = Task { [weak self] in
-                await self?.calculateRoute(from: from, to: destination.coordinate, name: destination.name)
+                await self?.calculateRoute(from: from, to: destination.coordinate, name: destination.name, requestID: request)
             }
         }
     }
 
+    /// Advances the cluster countdown between GPS updates using distance actually travelled.
+    public func tick() {
+        guard isNavigating, !arrived else { return }
+        let distances = countdown.at(travelledM: odometer.totalM)
+        maneuverM = max(0, distances.maneuverM)
+        if let remaining = distances.remainingM { remainingM = max(0, remaining) }
+        updateArrival()
+        if remainingM < 20 { arrived = true }
+    }
+
     private func advanceProgress() {
-        guard let route, !steps.isEmpty else { return }
-        remainingM = Int(max(totalM - travelledM, 0).rounded())
+        guard let _ = route, !steps.isEmpty else { return }
+        let rawRemaining = Int(max(totalM - travelledM, 0).rounded())
         let index = steps.firstIndex { $0.endM > travelledM } ?? steps.count - 1
         let step = steps[max(index, 0)]
-        maneuverM = Int(max(step.endM - travelledM, 0).rounded())
+        let rawManeuver = Int(max(step.endM - travelledM, 0).rounded())
         instruction = step.instruction
         road = step.road
         turn = step.turn
+        nextTurn = RouteTurn.thenTurn(step.instruction)
+
+        let raw = MapsCue(
+            turn: turn, distanceMeters: rawManeuver, instruction: instruction, road: road,
+            arrivalHour24: nil, arrivalMinute: nil, remainingMeters: rawRemaining,
+            rerouting: rerouting, thenTurn: nextTurn
+        )
+        countdown.update(raw, travelledM: odometer.totalM, nowMs: Int64(ProcessInfo.processInfo.systemUptime * 1000))
+        let distances = countdown.at(travelledM: odometer.totalM)
+        maneuverM = max(0, distances.maneuverM)
+        remainingM = max(0, distances.remainingM ?? rawRemaining)
+        updateArrival()
+        if remainingM < 20 { arrived = true }
+    }
+
+    private func updateArrival() {
+        guard let route else { arrivalDate = nil; return }
         let fraction = totalM > 0 ? min(max(Double(remainingM) / totalM, 0), 1) : 0
         arrivalDate = Date().addingTimeInterval(route.expectedTravelTime * fraction)
-        if remainingM < 20 {
-            arrived = true
-        }
     }
 
     public var cue: MapsCue? {
@@ -307,7 +384,8 @@ public final class NavigationModel: NSObject, MKLocalSearchCompleterDelegate {
             arrivalHour24: parts.hour,
             arrivalMinute: parts.minute,
             remainingMeters: remainingM,
-            rerouting: rerouting
+            rerouting: rerouting,
+            thenTurn: nextTurn
         )
     }
 
@@ -376,45 +454,111 @@ public final class NavigationModel: NSObject, MKLocalSearchCompleterDelegate {
 
 /// Maps a MapKit instruction ("Turn right onto MG Road") to the cluster's turn symbol and road name.
 public enum RouteTurn {
+    private static let sideNote = regex("\\s*\\([^)]*\\)")
+    private static let leadingLandmark = regex("^at\\s+(?!the\\s)[^,]+,\\s*")
+    private static let nameClause = regex(
+        "\\s+(?:onto|towards?|after|before|past|via|by|follow)\\s+|\\s+(?:at|on)\\s+(?!(?:the|your)\\s+(?:next\\s+)?(?:left|right|roundabout|rotary|traffic circle|fork|end)\\b)|\\s+to\\s+(?!(?:take|stay|continue|follow|merge|keep|turn|make|use|go|enter|exit|join|reach|get|avoid)\\b)"
+    )
+    private static let destination = regex(
+        "\\byour destination\\b|\\bdestination will be on\\b|\\byou have arrived\\b|\\barrived? at\\b|\\b(?:is|will be) on (?:the|your) (?:left|right)\\.?$|^(?:you(?:'|’)ve\\s+)?arrived\\b"
+    )
+    private static let thenClause = regex(
+        "(?:\\s*[,;]\\s*|\\s+[·•|]\\s+|\\s+|^)(?:and\\s+)?then\\b[\\s,]*(?=(?:turn|keep|make|take|bear|slight|sharp|stay|continue|go|merge|exit|enter|use|head|at\\s+the|u[- ]?turn|you(?:'|’)ll|arrive|your\\s+destination|the\\s+destination)\\b)"
+    )
+
     public static func of(_ instruction: String) -> Int {
-        let text = instruction.lowercased()
-        if text.contains("arrive") || text.contains("destination") || text.contains("you have reached") {
-            return NavTurn.destination
+        let core = current(instruction).lowercased()
+        let maneuver = Self.split(nameClause, replacing(leadingLandmark, in: core, with: "")).first ?? core
+        func has(_ pattern: String) -> Bool { matches(regex("\\b(?:\(pattern))\\b"), in: maneuver) }
+        let left = has("left")
+        let right = has("right")
+
+        if has("u[- ]?turn") {
+            return has("left u[- ]?turn|u[- ]?turn to the left") ? NavTurn.uTurnLeft : NavTurn.uTurnRight
         }
-        if text.contains("u-turn") || text.contains("u turn") { return NavTurn.uTurnLeft }
-        if text.contains("roundabout") || text.contains("rotary") || text.contains("traffic circle") {
-            return text.contains("take the") && text.contains("exit") ? NavTurn.roundaboutRight : NavTurn.roundaboutLeft
+        if has("roundabouts?|traffic circle|at the rotary|(?:\\d+(?:st|nd|rd|th)|first|second|third|fourth|fifth|sixth) exit|exit\\s+\\d+") {
+            return has("counterclockwise|anticlockwise") ? NavTurn.roundaboutRight : NavTurn.roundaboutLeft
         }
-        if text.contains("slight left") { return NavTurn.slightLeft }
-        if text.contains("slight right") { return NavTurn.slightRight }
-        if text.contains("sharp left") { return NavTurn.sharpLeft }
-        if text.contains("sharp right") { return NavTurn.sharpRight }
-        if text.contains("keep left") { return NavTurn.keepLeft }
-        if text.contains("keep right") { return NavTurn.keepRight }
-        if text.contains("fork left") { return NavTurn.forkLeft }
-        if text.contains("fork right") { return NavTurn.forkRight }
-        if text.contains("ramp") || text.contains("exit") {
-            return text.contains("left") ? NavTurn.rampLeft : NavTurn.rampRight
-        }
-        if text.contains("merge") { return NavTurn.merge }
-        if text.contains("ferry") || text.contains("train") { return NavTurn.ferryTrain }
-        if text.contains("turn left") || text.contains("left onto") { return NavTurn.left }
-        if text.contains("turn right") || text.contains("right onto") { return NavTurn.right }
+        if matches(destination, in: core) { return NavTurn.destination }
+        if has("sharp left") { return NavTurn.sharpLeft }
+        if has("sharp right") { return NavTurn.sharpRight }
+        if has("slight left|bear left|slightly left") { return NavTurn.slightLeft }
+        if has("slight right|bear right|slightly right") { return NavTurn.slightRight }
+        if has("keep left") { return NavTurn.keepLeft }
+        if has("keep right") { return NavTurn.keepRight }
+        if has("turn left|make a left") { return NavTurn.left }
+        if has("turn right|make a right") { return NavTurn.right }
+        if has("fork") { return right && !left ? NavTurn.forkRight : NavTurn.forkLeft }
+        if has("ramp|exit") { return right && !left ? NavTurn.rampRight : NavTurn.rampLeft }
+        if has("merge") { return NavTurn.merge }
+        if has("ferry") { return has("train") ? NavTurn.ferryTrain : NavTurn.ferry }
+        if has("head|continue|straight|stay|pass") { return NavTurn.straight }
+        if left && !right { return NavTurn.left }
+        if right && !left { return NavTurn.right }
         return NavTurn.straight
     }
 
     public static func road(_ instruction: String) -> String {
-        let text = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
-        for marker in [" onto ", " on ", " toward ", " towards ", " via "] {
-            if let range = text.range(of: marker, options: .caseInsensitive) {
-                var road = String(text[range.upperBound...])
-                if let cut = road.range(of: " and ") { road = String(road[..<cut.lowerBound]) }
-                road = road.trimmingCharacters(in: CharacterSet(charactersIn: " .,;"))
-                if road.isEmpty { continue }
-                return road
+        let text = replacing(sideNote, in: instruction, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if matches(destination, in: text.lowercased()) { return "" }
+        func after(_ keyword: String) -> String? {
+            let pattern = "\\b\(keyword)\\s++(?!(?:the|your)\\s+(?:left|right)\\b)(.+)$"
+            guard let match = regex(pattern, options: .caseInsensitive).firstMatch(
+                in: text, range: NSRange(text.startIndex..., in: text)
+            ), let range = Range(match.range(at: 1), in: text) else { return nil }
+            var value = String(text[range])
+            let separators = regex("\\s+towards?\\s+|\\s+via\\s+|\\s+for\\s+\\d|\\s*[,;]\\s*|\\s+then\\s+|\\s+[·•|]\\s+", options: .caseInsensitive)
+            if let cut = separators.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)),
+               let range = Range(cut.range, in: value) {
+                value = String(value[..<range.lowerBound])
             }
+            value = value.components(separatedBy: "/").first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: ".")) ?? ""
+            return value.isEmpty ? nil : value
         }
-        return ""
+        let to = "to(?!\\s+(?:take|stay|continue|follow|merge|keep|turn|make|use|go|enter|exit|join|reach|get|avoid)\\b)"
+        return after("onto") ?? after("on") ?? after("towards") ?? after("toward")
+            ?? after(to) ?? after("follow(?!\\s+signs\\b)") ?? ""
+    }
+
+    public static func current(_ instruction: String) -> String {
+        let text = replacing(sideNote, in: instruction, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let match = thenClause.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let range = Range(match.range, in: text) {
+            let head = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return head.isEmpty ? text : head
+        }
+        return text
+    }
+
+    /// A second maneuver only when the instruction contains an explicit "then …" clause.
+    public static func thenTurn(_ instruction: String) -> Int? {
+        let text = replacing(sideNote, in: instruction, with: "")
+        guard let match = thenClause.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range, in: text) else { return nil }
+        let tail = String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return tail.isEmpty ? nil : of(tail)
+    }
+
+    private static func regex(_ pattern: String, options: NSRegularExpression.Options = []) -> NSRegularExpression {
+        try! NSRegularExpression(pattern: pattern, options: options)
+    }
+
+    private static func matches(_ expression: NSRegularExpression, in text: String) -> Bool {
+        expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+
+    private static func replacing(_ expression: NSRegularExpression, in text: String, with replacement: String) -> String {
+        expression.stringByReplacingMatches(
+            in: text, range: NSRange(text.startIndex..., in: text), withTemplate: replacement
+        )
+    }
+
+    private static func split(_ expression: NSRegularExpression, _ text: String) -> [String] {
+        expression.stringByReplacingMatches(
+            in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "\u{1F}"
+        ).components(separatedBy: "\u{1F}")
     }
 }
 

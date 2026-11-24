@@ -22,14 +22,15 @@ jobs:
           swift --version
           xcodebuild -version
 
-      # Whole package (core + UI + preview/snapshot tools) for macOS, plus every
-      # ported Android test vector.
-      - name: Protocol and logic tests
-        run: swift run RutaTests
+      # Build every SwiftPM product on macOS (core, UI, preview and snapshot tools), then run
+      # every ported Android test vector.
+      - name: Build package and run tests
+        run: |
+          swift build
+          swift run RutaTests
 
-      # The Xcode project is committed, so this builds exactly what a friend
-      # downloads and opens. No signing: the artifact is re-signed at install
-      # time (Xcode, Sideloadly, AltStore) or by TestFlight's own build.
+      # The Xcode project is committed, so this builds exactly what a friend downloads and opens.
+      # No signing: the artifact is re-signed at install time by Sideloadly/SideStore/Xcode.
       - name: Build for iOS Simulator
         run: |
           set -o pipefail
@@ -37,6 +38,8 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             -configuration Debug \
             -derivedDataPath build \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            RUTA_GIT_COMMIT=${{ github.sha }} \
             CODE_SIGNING_ALLOWED=NO build \
             | (command -v xcbeautify >/dev/null && xcbeautify --quieter || cat)
 
@@ -47,27 +50,53 @@ jobs:
             -destination 'generic/platform=iOS' \
             -configuration Release \
             -derivedDataPath build \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            RUTA_GIT_COMMIT=${{ github.sha }} \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build \
             | (command -v xcbeautify >/dev/null && xcbeautify --quieter || cat)
 
+      - name: Package simulator app
+        run: |
+          cd build/Build/Products/Debug-iphonesimulator
+          zip -qr ../../../Ruta-simulator-app.zip Ruta.app
+
       - name: Package unsigned IPA
         run: |
+          short=${GITHUB_SHA::7}
           cd build/Build/Products/Release-iphoneos
-          mkdir Payload
+          mkdir -p Payload
           cp -R Ruta.app Payload/
-          zip -qry Ruta-unsigned.ipa Payload
-          mv Ruta-unsigned.ipa ../../../Ruta-unsigned.ipa
+          zip -qry "Ruta-unsigned-${short}.ipa" Payload
+          mv "Ruta-unsigned-${short}.ipa" ../../../
+          cd ../../..
+          shasum -a 256 "Ruta-unsigned-${short}.ipa" > "Ruta-unsigned-${short}.ipa.sha256"
+          printf '%s\n' "$GITHUB_SHA" > Ruta-unsigned.commit
+
+      - name: Package dSYMs
+        run: |
+          cd build/Build/Products/Release-iphoneos
+          zip -qr ../../../Ruta-dSYMs.zip Ruta.app.dSYM
 
       - name: Upload simulator app
         uses: actions/upload-artifact@v5
         with:
-          name: Ruta-simulator-app
-          path: build/Build/Products/Debug-iphonesimulator/Ruta.app
+          name: Ruta-simulator-app-${{ github.sha }}
+          path: build/Ruta-simulator-app.zip
           if-no-files-found: error
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v5
         with:
-          name: Ruta-unsigned-ipa
-          path: build/Ruta-unsigned.ipa
+          name: Ruta-unsigned-ipa-${{ github.sha }}
+          path: |
+            build/Ruta-unsigned-*.ipa
+            build/Ruta-unsigned-*.ipa.sha256
+            build/Ruta-unsigned.commit
+          if-no-files-found: error
+
+      - name: Upload dSYMs
+        uses: actions/upload-artifact@v5
+        with:
+          name: Ruta-dSYMs-${{ github.sha }}
+          path: build/Ruta-dSYMs.zip
           if-no-files-found: error

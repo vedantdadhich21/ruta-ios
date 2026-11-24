@@ -6,6 +6,7 @@ import RutaCore
 public struct RutaRootView: View {
     @State private var model: RutaModel
     @State private var showOnboarding: Bool
+    @Environment(\.scenePhase) private var scenePhase
 
     public init(model: RutaModel? = nil) {
         let created = model ?? RutaModel()
@@ -48,6 +49,16 @@ public struct RutaRootView: View {
             .interactiveDismissDisabled()
         }
         .task { model.start() }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                model.saveAndPause()
+            case .active:
+                model.resumeIfNeeded()
+            default:
+                break
+            }
+        }
     }
 
     private var alertTitle: String { model.alert?.title ?? "Ruta" }

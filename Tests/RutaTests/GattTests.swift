@@ -60,4 +60,13 @@ func runGattResolution() {
     // One entry per characteristic, nothing invented.
     eq(phone.count, 1, "one resolution for one UUID")
     check(GattResolution.resolve([]).isEmpty, "empty discovery resolves to nothing")
+
+    // Included-service traversal: every unique service is visited exactly once, including nested
+    // services; cycles and duplicate include edges cannot inflate the callback count.
+    eq(GattTraversal.order(primary: ["a", "b"], included: [:]), ["a", "b"],
+       "primary-only traversal has one callback per service")
+    eq(GattTraversal.order(primary: ["a"], included: ["a": ["b"], "b": ["c"]]), ["a", "b", "c"],
+       "nested included services are traversed")
+    eq(GattTraversal.order(primary: ["a"], included: ["a": ["b", "b"], "b": ["a", "c"]]),
+       ["a", "b", "c"], "cycles and duplicate edges are ignored")
 }

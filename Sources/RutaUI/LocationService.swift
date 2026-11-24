@@ -22,7 +22,7 @@ public final class LocationService: NSObject, CLLocationManagerDelegate {
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
         manager.activityType = .automotiveNavigation
-        manager.distanceFilter = 2
+        manager.distanceFilter = kCLDistanceFilterNone
         manager.pausesLocationUpdatesAutomatically = false
         refreshStatus()
     }
@@ -64,8 +64,15 @@ public final class LocationService: NSObject, CLLocationManagerDelegate {
         manager.requestLocation()
     }
 
-    public var coordinate: CLLocationCoordinate2D? {
-        manager.location?.coordinate
+    public var coordinate: CLLocationCoordinate2D? { freshCoordinate }
+
+    public var freshCoordinate: CLLocationCoordinate2D? {
+        guard let location = manager.location,
+              abs(location.timestamp.timeIntervalSinceNow) <= 5,
+              location.horizontalAccuracy >= 0,
+              location.horizontalAccuracy <= 50,
+              location.coordinate.latitude != 0 || location.coordinate.longitude != 0 else { return nil }
+        return location.coordinate
     }
 
     private func refreshStatus() {
@@ -80,8 +87,13 @@ public final class LocationService: NSObject, CLLocationManagerDelegate {
     }
 
     public nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        let fixes: [GeoFix] = locations.map { location in
-            GeoFix(
+        let fixes: [GeoFix] = locations.compactMap { location in
+            // Core Location can return a cached fix immediately after launch; never use an old
+            // position as the origin of a ride or navigation route.
+            guard abs(location.timestamp.timeIntervalSinceNow) <= 5,
+                  location.horizontalAccuracy >= 0,
+                  location.coordinate.latitude != 0 || location.coordinate.longitude != 0 else { return nil }
+            return GeoFix(
                 time: Int64(location.timestamp.timeIntervalSince1970 * 1000),
                 lat: location.coordinate.latitude,
                 lng: location.coordinate.longitude,
@@ -90,10 +102,16 @@ public final class LocationService: NSObject, CLLocationManagerDelegate {
             )
         }
         Task { @MainActor in
-            self.status = CLLocationManager.locationServicesEnabled()
-                ? (self.running ? .fix : .idle)
-                : .disabled
-            for fix in fixes { self.onFix?(fix) }
+            guard CLLocationManager.locationServicesEnabled() else {
+                self.status = .disabled
+                return
+            }
+            if fixes.isEmpty {
+                if self.running { self.status = .searching }
+            } else {
+                self.status = self.running ? .fix : .idle
+                for fix in fixes { self.onFix?(fix) }
+            }
         }
     }
 

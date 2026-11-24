@@ -87,4 +87,56 @@ func runRideRecorder() {
     if let charge = charges.first {
         check(charge.socStart == 50 && charge.socEnd == 52, "charge session charge")
     }
+
+    // A paused active ride is checkpointed and recovered by a fresh recorder instead of being lost.
+    let recoveryStore = RideStore(url: folder.appendingPathComponent("recovery-rides.json"))
+    let first = RideRecorder(store: recoveryStore)
+    let start: Int64 = 1_700_100_000_000
+    first.setLink(ready: true)
+    first.vehicle(VehicleState(
+        ignitionOn: true, immobilised: false, handleLocked: false,
+        rideMode: 3, regenLevel: 0, accelerationLevel: 0, speedLimit: 60, time: start
+    ))
+    first.tick(now: start)
+    var recoveryLat = 12.9716
+    for second in 0..<70 {
+        let now = start + Int64(second + 1) * 1_000
+        recoveryLat += 8.33 / 111_320.0
+        first.fix(lat: recoveryLat, lng: 77.5946, accuracyM: 5, speedKmh: 30, at: now)
+        first.tick(now: now)
+    }
+    first.pause(now: start + 71_000)
+
+    let recovered = RideRecorder(store: recoveryStore)
+    var recoveredSaved: [StoredRide] = []
+    recovered.onSaved = { recoveredSaved.append($0) }
+    check(recovered.state.riding && recovered.state.distanceM > 200, "unfinished ride recovered from checkpoint")
+    recovered.resume(now: start + 80_000)
+    recovered.setLink(ready: true)
+    recovered.vehicle(VehicleState(
+        ignitionOn: true, immobilised: false, handleLocked: false,
+        rideMode: 3, regenLevel: 0, accelerationLevel: 0, speedLimit: 60, time: start + 80_000
+    ))
+    recovered.tick(now: start + 80_000)
+    recovered.vehicle(VehicleState(
+        ignitionOn: false, immobilised: true, handleLocked: true,
+        rideMode: 3, regenLevel: 0, accelerationLevel: 0, speedLimit: 60, time: start + 81_000
+    ))
+    for second in 0..<70 { recovered.tick(now: start + 81_000 + Int64(second) * 1_000) }
+    check(recoveredSaved.count == 1 && recoveryStore.load().count == 1, "recovered ride is saved once")
+
+    // A charge-only checkpoint must not manufacture an empty active ride.
+    let chargeOnlyStore = RideStore(url: folder.appendingPathComponent("charge-only-rides.json"))
+    let chargeOnlyCharges = ChargeStore(url: folder.appendingPathComponent("charge-only-charges.json"))
+    let charging = RideRecorder(store: chargeOnlyStore, chargeStore: chargeOnlyCharges)
+    charging.setLink(ready: true)
+    charging.soc(50, at: t0)
+    charging.tick(now: t0)
+    charging.soc(52, at: t0 + 360_000)
+    charging.tick(now: t0 + 360_000)
+    check(charging.state.charging != nil, "charge-only session active")
+    charging.pause(now: t0 + 360_000)
+    let chargeRecovered = RideRecorder(store: chargeOnlyStore, chargeStore: chargeOnlyCharges)
+    check(!chargeRecovered.state.riding && chargeRecovered.state.charging != nil,
+          "charge-only checkpoint restores charging without a phantom ride")
 }

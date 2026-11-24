@@ -1,5 +1,6 @@
 import Foundation
 import RutaCore
+import RutaUI
 
 // Port of the pure parts of `tests/NavTest.kt`: TFT road names, "Then …" hints, the distance
 // countdown and the navigation odometer. The Android notification parser has no iOS equivalent.
@@ -13,6 +14,34 @@ private func navCue(
         arrivalHour24: nil, arrivalMinute: nil, remainingMeters: remaining, rerouting: false,
         thenTurn: then
     )
+}
+
+func runRouteTurn() {
+    let turns: [(String, Int)] = [
+        ("Turn right onto Rotary Club Rd", NavTurn.right),
+        ("Turn left onto Rampur Rd", NavTurn.left),
+        ("Bear left", NavTurn.slightLeft),
+        ("Make a right", NavTurn.right),
+        ("Make a U-turn", NavTurn.uTurnRight),
+        ("Make a left U-turn", NavTurn.uTurnLeft),
+        ("At the roundabout, take the 2nd exit", NavTurn.roundaboutLeft),
+        ("Turn counterclockwise around the roundabout", NavTurn.roundaboutRight),
+        ("At MG Road Circle, take the 2nd exit", NavTurn.roundaboutLeft),
+        ("Take exit 12", NavTurn.roundaboutLeft),
+        ("Turn right onto Ferry Ghat Rd", NavTurn.right),
+        ("Continue onto Ferry Ghat Rd", NavTurn.straight),
+        ("Arrive at Rotary Club Rd", NavTurn.destination),
+        ("Turn left, then turn right onto Rampur Rd", NavTurn.left),
+    ]
+    for (text, expected) in turns {
+        eq(RouteTurn.of(text), expected, "turn: \(text)")
+    }
+    eq(RouteTurn.road("Turn right onto Rotary Club Rd"), "Rotary Club Rd", "road name is not a maneuver")
+    eq(RouteTurn.road("Turn left onto Rampur Rd / NH 65"), "Rampur Rd", "road alias removed")
+    eq(RouteTurn.road("Arrive at Rotary Club Rd"), "", "arrival has no next road")
+    eq(RouteTurn.thenTurn("Turn left, then turn right onto Rampur Rd"), NavTurn.right,
+       "explicit then-clause becomes the second maneuver")
+    check(RouteTurn.thenTurn("Continue onto MG Rd") == nil, "next structured step is not a then hint")
 }
 
 func runNavigation() {

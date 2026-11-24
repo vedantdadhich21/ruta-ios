@@ -163,7 +163,7 @@ public final class BmsDecoder {
         switch pack {
         case 0:
             return BmsFrame(
-                soh: frame.soh, soc: 0, packTemp: 0, chargeTimeRaw: frame.chargeTimeRaw,
+                soh: 0, soc: 0, packTemp: 0, chargeTimeRaw: frame.chargeTimeRaw,
                 bmsStatus: frame.bmsStatus, pack1Status: frame.pack1Status, pack2Status: frame.pack2Status,
                 pack1Soh: frame.pack1Soh, pack1Soc: frame.pack1Soc, pack1Soe: frame.pack1Soe, pack1Temp: frame.pack1Temp,
                 pack2Soh: frame.pack2Soh, pack2Soc: frame.pack2Soc, pack2Soe: frame.pack2Soe, pack2Temp: frame.pack2Temp

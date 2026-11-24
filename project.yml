@@ -22,6 +22,7 @@ targets:
         PRODUCT_NAME: Ruta
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
+        RUTA_GIT_COMMIT: "local"
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"

@@ -26,7 +26,7 @@ public enum TransportEvent: Sendable {
     case writeResult(characteristic: String, success: Bool)
     case readResult(characteristic: String, success: Bool)
     case notifyState(characteristic: String, enabled: Bool)
-    case pairingRequired
+    case pairingRequired(Bool)
     case failure(String)
 }
 
@@ -44,6 +44,15 @@ public protocol ScooterTransport: AnyObject {
     func setNotify(_ characteristic: String, enabled: Bool)
     func read(_ characteristic: String)
     func write(_ characteristic: String, _ data: [UInt8], withResponse: Bool)
+    /// Returns true when the session may enter READY. A transport can refuse while a pairing/security
+    /// episode is still unresolved.
+    @discardableResult
+    func noteSetupAccepted() -> Bool
+}
+
+public extension ScooterTransport {
+    @discardableResult
+    func noteSetupAccepted() -> Bool { true }
 }
 
 /// Stable identity of a scooter on this phone. iOS hides the Bluetooth MAC address; a

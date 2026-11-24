@@ -1,5 +1,9 @@
 # Testing Ruta on a real scooter
 
+> For the current VX2/iOS discovery issue, use the controlled
+> [`FIELD-DIAGNOSTIC.md`](FIELD-DIAGNOSTIC.md) sequence instead of the general walkthrough below.
+> It distinguishes a bond gate, an iOS GATT cache and a Ruta discovery bug in one session.
+
 A ~60-minute script for the first person with an iPhone and a Vida scooter. Ordered so the one
 thing that could be broken (the pairing PIN flow) gets settled first, before anything else is
 touched. Send notes back to whoever gave you the build — especially anything in the Diagnostics
@@ -20,6 +24,9 @@ This settles the biggest unknown without Ruta in the loop:
 5. If no sheet appears, or the PIN is rejected: Ruta will not work either. Try forgetting the
    scooter in Settings › Bluetooth, restart the scooter, and retry once. If it still fails, stop
    here and report — the scooter's firmware may reject Apple devices.
+
+A PIN prompt alone is **not** success: nRF must finish service discovery and show the full service
+tree. Record any authentication/encryption error and the exact operation that triggers it.
 
 ## 1. Install and explore (5 min)
 

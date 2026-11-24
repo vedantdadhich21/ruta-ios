@@ -1,6 +1,109 @@
 import Foundation
 import RutaCore
 
+private final class ScriptedTransport: ScooterTransport {
+    var onEvent: ((TransportEvent) -> Void)?
+    var availableCharacteristics: Set<String> = []
+    var operations: [String] = []
+    var failFirstNotify: String?
+    var failAlways: String?
+    var autoReady = true
+    var respondToOperations = true
+
+    func startScan() {}
+    func stopScan() {}
+    func connect(to id: UUID) {
+        onEvent?(.connected)
+        if autoReady { onEvent?(.ready) }
+    }
+    func disconnect() {}
+    func setNotify(_ characteristic: String, enabled: Bool) {
+        let key = characteristic.lowercased()
+        operations.append("notify \(Self.short(key))")
+        guard respondToOperations else { return }
+        if failAlways == key || (failFirstNotify == key) {
+            failFirstNotify = nil
+            onEvent?(.notifyState(characteristic: key, enabled: false))
+        } else {
+            onEvent?(.notifyState(characteristic: key, enabled: true))
+        }
+    }
+    func read(_ characteristic: String) {
+        operations.append("read \(Self.short(characteristic.lowercased()))")
+        guard respondToOperations else { return }
+        onEvent?(.readResult(characteristic: characteristic.lowercased(), success: true))
+    }
+    func write(_ characteristic: String, _ data: [UInt8], withResponse: Bool) {
+        operations.append("write \(Self.short(characteristic.lowercased()))")
+        guard respondToOperations else { return }
+        onEvent?(.writeResult(characteristic: characteristic.lowercased(), success: true))
+    }
+
+    private static func short(_ uuid: String) -> String {
+        String(uuid.split(separator: "-").first.map(String.init)?.suffix(4) ?? "")
+    }
+}
+
+func runGattRetry() {
+    let clock = ManualScheduler()
+    let transport = ScriptedTransport()
+    transport.availableCharacteristics = [
+        Tcu.tcuInfo, Tcu.osInfo, Tcu.phoneHeartbeat, Tcu.tcuHeartbeat,
+        Tcu.vehicleState, Tcu.esyncState, Tcu.statsRequest, Tcu.statsUpdate,
+        Tcu.icbtControl,
+    ]
+    transport.failFirstNotify = Tcu.tcuHeartbeat
+    let session = ScooterSession(transport: transport, scheduler: clock, defaults: nil)
+    var ready = 0
+    session.onConnected = { ready += 1 }
+
+    session.connect(id: UUID(), name: "Test VX2")
+    check(session.phase == .connecting, "setup starts before the retry delay")
+    eq(transport.operations, ["notify 0104"], "failed operation does not let later work run")
+    clock.advance(250)
+    check(Array(transport.operations.prefix(3)) == ["notify 0104", "notify 0104", "read 0101"],
+          "failed operation retries at the head before pending work")
+    clock.advance(1_000)
+    check(session.phase == .ready && ready == 1, "setup completes after the retry")
+    check(transport.operations.contains("notify 0402"), "stats notification still runs")
+    session.disconnect()
+
+    // Exhausting retries on a critical setup operation must fail instead of silently skipping it.
+    let failingClock = ManualScheduler()
+    let failing = ScriptedTransport()
+    failing.availableCharacteristics = transport.availableCharacteristics
+    failing.failAlways = Tcu.tcuHeartbeat
+    let failedSession = ScooterSession(transport: failing, scheduler: failingClock, defaults: nil)
+    var ended = 0
+    failedSession.onEnded = { _ in ended += 1 }
+    failedSession.connect(id: UUID(), name: "Failing VX2")
+    failingClock.advance(250)
+    failingClock.advance(250)
+    check(failedSession.phase == .idle, "critical failure ends setup")
+    eq(failing.operations, ["notify 0104", "notify 0104", "notify 0104"],
+       "critical operation is retried three times, never skipped")
+    check(ended == 1, "terminal setup failure is reported")
+}
+
+func runSetupTimeoutReplacement() {
+    let clock = ManualScheduler()
+    let transport = ScriptedTransport()
+    transport.autoReady = false
+    transport.respondToOperations = false
+    transport.availableCharacteristics = [
+        Tcu.tcuInfo, Tcu.osInfo, Tcu.phoneHeartbeat, Tcu.tcuHeartbeat,
+        Tcu.vehicleState, Tcu.esyncState, Tcu.statsRequest, Tcu.statsUpdate,
+    ]
+    let session = ScooterSession(transport: transport, scheduler: clock, defaults: nil)
+    session.connect(id: UUID(), name: "Slow VX2")
+    clock.advance(30_000)
+    transport.onEvent?(.ready)
+    // The original 35 s connection deadline must have been replaced by the Stage A/B deadline.
+    clock.advance(6_000)
+    check(session.phase == .connecting, "old setup deadline does not fire after services are ready")
+    session.disconnect()
+}
+
 // Session state machine, GATT sequence, the priority lane and NavDisplay, driven by a manual
 // clock and the in-memory scooter. This is the closest local proof of the iOS link without a phone.
 

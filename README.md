@@ -35,7 +35,7 @@ phone locks, and the scooter's responses outside VX2. The friend-facing test scr
   pack balance, charge alerts (80/90/100 %), charge ETA.
 - **Rides** — recorded from GPS with ignition/movement start rules, thinned tracks, place names via
   reverse geocoding, speed charts, per-ride battery use, delete, open route in Maps.
-- **Range** — learned km-per-% from your rides, live range, "short by X km" alert.
+- **Range** — learned km-per-% from your rides and a live range estimate.
 - **Navigation** — search a place, drive the route in-app on Apple Maps, and the next turn, distance
   to it, road name and arrival time are sent to the scooter's cluster with a live countdown.
 - **Diagnostics** — a timestamped frame log, exportable as text from the More tab.
@@ -77,7 +77,8 @@ swift run RutaSnapshot    # writes docs/screenshots/*.png
 ## Building the iPhone app
 
 The easiest route is CI: the workflow builds the app for the simulator and an unsigned device IPA,
-and uploads both as artifacts. Grab `Ruta-unsigned-ipa` from any run.
+and uploads both as artifacts. Grab `Ruta-unsigned-ipa-<full-sha>` from the latest successful
+`main` run; the artifact includes the IPA, its SHA-256 and the exact commit.
 
 To build locally (any Mac with Xcode 16+):
 
@@ -100,7 +101,7 @@ xcodebuild -project Ruta.xcodeproj -scheme Ruta \
 |---|---|---|
 | Sideloadly / AltStore + free Apple ID | free | re-signs the unsigned IPA; refresh every 7 days — see [`docs/INSTALL.md`](docs/INSTALL.md) |
 | Xcode → device | free | needs the Mac and the iPhone together, 7-day resign |
-| TestFlight | $99/yr Apple Developer | the smooth way to hand a friend one build |
+| TestFlight | $99/yr Apple Developer | smoothest delivery, but needs a separately signed Xcode 26+ build; the unsigned CI IPA is not directly uploadable |
 
 ## Pairing (read this first)
 

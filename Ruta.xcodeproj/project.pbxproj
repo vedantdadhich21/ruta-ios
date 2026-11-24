@@ -8,11 +8,13 @@
 
 /* Begin PBXBuildFile section */
 		232D258B29BDDC7C024ECB2D /* RutaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA75AB8E1A1B220BCA503FBE /* RutaApp.swift */; };
+		68C9A21A6F38B792C5CB8C2E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 84378EA4B9E7B2070D25007F /* Assets.xcassets */; };
 		953250CECDBB25F4075A73B9 /* RutaUI in Frameworks */ = {isa = PBXBuildFile; productRef = 6CCAE82207739DD634087C6F /* RutaUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		217E56D5C2150EAE63B967FD /* Ruta.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Ruta.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		84378EA4B9E7B2070D25007F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		99D0270EFCEFD09DAB93619C /* vida-ios */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "vida-ios"; path = .; sourceTree = SOURCE_ROOT; };
 		B3AB708A0AA9ADAC1DD8273E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		BA75AB8E1A1B220BCA503FBE /* RutaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RutaApp.swift; sourceTree = "<group>"; };
@@ -50,6 +52,7 @@
 		CDB59A8877EEE2371A07D82C /* App */ = {
 			isa = PBXGroup;
 			children = (
+				84378EA4B9E7B2070D25007F /* Assets.xcassets */,
 				B3AB708A0AA9ADAC1DD8273E /* Info.plist */,
 				BA75AB8E1A1B220BCA503FBE /* RutaApp.swift */,
 			);
@@ -72,6 +75,7 @@
 			buildConfigurationList = F77BEFA76D1C2DAE7CDE8E01 /* Build configuration list for PBXNativeTarget "Ruta" */;
 			buildPhases = (
 				8EFA76AB0FC13438B55F6564 /* Sources */,
+				DDBCD685BB3CDB536BEF0A6E /* Resources */,
 				ADC2313960192AF06C35953E /* Frameworks */,
 			);
 			buildRules = (
@@ -122,6 +126,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		DDBCD685BB3CDB536BEF0A6E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				68C9A21A6F38B792C5CB8C2E /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		8EFA76AB0FC13438B55F6564 /* Sources */ = {
@@ -273,6 +288,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = app.ruta.companion;
 				PRODUCT_NAME = Ruta;
+				RUTA_GIT_COMMIT = local;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
@@ -300,6 +316,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = app.ruta.companion;
 				PRODUCT_NAME = Ruta;
+				RUTA_GIT_COMMIT = local;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;

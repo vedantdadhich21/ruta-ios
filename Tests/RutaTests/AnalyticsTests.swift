@@ -113,6 +113,9 @@ func runBatteryAnalytics() {
     check(lookup(warmReadings, 0, .temperature) == 29.3 && lookup(warmReadings, 1, .temperature) == 28.9, "hundredths")
     for _ in 0..<(BmsDecoder.latchFrames - 1) { _ = readingsOf(hundredths, warm) }
     check(hundredths.temperatureDivisor == 100 && BmsDecoder(temperatureDivisor: 100).temperatureDivisor == 100, "hundredths latch")
+    let asleepTotal = readingsOf(BmsDecoder(100, 100), warm.copy(packTemp: BmsDecoder.placeholderTemperatureRaw))
+    check(!hasPack(asleepTotal, 0), "hundredths pack-0 placeholder removes the whole aggregate pack")
+    check(lookup(asleepTotal, 1, .soc) != nil, "pack 1 survives pack-0 placeholder")
 
     // Live 30-byte frames.
     let liveFrame = bmsFrame(liveFrameHex)

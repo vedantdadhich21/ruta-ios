@@ -14,7 +14,7 @@ let package = Package(
         .target(name: "RutaUI", dependencies: ["RutaCore"]),
         .executableTarget(name: "RutaPreview", dependencies: ["RutaUI"]),
         .executableTarget(name: "RutaSnapshot", dependencies: ["RutaUI"]),
-        .executableTarget(name: "RutaTests", dependencies: ["RutaCore"], path: "Tests/RutaTests"),
+        .executableTarget(name: "RutaTests", dependencies: ["RutaCore", "RutaUI"], path: "Tests/RutaTests"),
     ],
     swiftLanguageModes: [.v5]
 )

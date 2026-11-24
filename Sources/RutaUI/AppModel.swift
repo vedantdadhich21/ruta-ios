@@ -69,13 +69,7 @@ public final class RutaModel {
     public private(set) var statusText = "Not connected"
     public private(set) var phase: LinkPhase = .idle
     public private(set) var reconnecting = false
-    public var bluetooth: BluetoothState {
-        #if os(iOS)
-        (transport as? BluetoothScooterTransport)?.state ?? .unknown
-        #else
-        .poweredOn
-        #endif
-    }
+    public private(set) var bluetooth: BluetoothState = .unknown
     public private(set) var discovered: [DiscoveredScooter] = []
     public private(set) var scanning = false
     public private(set) var connectedName: String?
@@ -109,11 +103,14 @@ public final class RutaModel {
     private let demoRideStore: RideStore
     private let demoChargeStore: ChargeStore
     private var recorder: RideRecorder
-    private let chargeWatch = ChargeWatch()
+    private var chargeWatch = ChargeWatch()
+    private var connectedID: UUID?
+    private var pendingScooter: SavedScooter?
     private var ticker: Task<Void, Never>?
     private var scanTimer: Task<Void, Never>?
     private var started = false
     private var lastAlertAt: [String: Int64] = [:]
+    private var telemetryStale = false
 
     private enum Key {
         static let demo = "ruta.demo"
@@ -152,7 +149,15 @@ public final class RutaModel {
         #endif
         let chosenTransport = startDemo ? demoTransport : realTransport
         transport = chosenTransport
-        recorder = RideRecorder(store: startDemo ? demoRideStore : RideStore())
+        #if os(iOS)
+        bluetooth = (chosenTransport as? BluetoothScooterTransport)?.state ?? .unknown
+        #else
+        bluetooth = .poweredOn
+        #endif
+        recorder = RideRecorder(
+            store: startDemo ? demoRideStore : rideStore,
+            chargeStore: startDemo ? demoChargeStore : chargeStore
+        )
         navigation = NavigationModel()
         session = ScooterSession(transport: chosenTransport)
         session.navigationEnabled = navEnabled
@@ -197,11 +202,35 @@ public final class RutaModel {
         }
     }
 
-    /// Call when the app moves to the background. Saves the active ride; iOS does not keep tracking
-    /// with the app closed.
+    /// Call when the app moves to the background. GPS/navigation are foreground-only in this build,
+    /// so flush the portion already recorded instead of losing it when iOS suspends the process.
     public func saveAndPause() {
-        recorder.stop(now: now)
-        refreshRides()
+        #if os(iOS)
+        var task: UIBackgroundTaskIdentifier = .invalid
+        task = UIApplication.shared.beginBackgroundTask(withName: "Ruta save ride") {
+            if task != .invalid {
+                UIApplication.shared.endBackgroundTask(task)
+                task = .invalid
+            }
+        }
+        #endif
+        recorder.pause(now: now)
+        navigation.stop()
+        location.stop()
+        #if os(iOS)
+        keepAwake(false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            if task != .invalid {
+                UIApplication.shared.endBackgroundTask(task)
+                task = .invalid
+            }
+        }
+        #endif
+    }
+
+    public func resumeIfNeeded() {
+        recorder.resume(now: now)
+        if phase == .ready || ride.riding { location.start() }
     }
 
     private func tick() {
@@ -214,12 +243,17 @@ public final class RutaModel {
         session.missedCalls = missedCalls
         session.unreadMessages = unreadMessages
         finishNavigationIfNeeded()
+        navigation.tick()
         if let cue = navigation.cue {
             session.pushNavigation(cue.frame(now: Date()))
         }
         watchCharge(now: now)
+        if phase == .ready, lastReadingAt > 0, now - lastReadingAt > 10_000, !telemetryStale {
+            telemetryStale = true
+            statusText = "Connected · battery data stale"
+        }
         #if os(iOS)
-        keepAwake(phase == .ready || ride.riding)
+        keepAwake(ride.riding || navigation.isNavigating)
         #endif
     }
 
@@ -244,20 +278,41 @@ public final class RutaModel {
 
     public func connect(_ scooter: DiscoveredScooter) {
         stopScan()
-        var savedScooter = SavedScooter(id: scooter.id, name: scooter.name, nickname: scooter.name)
+        var candidate = SavedScooter(id: scooter.id, name: scooter.name, nickname: scooter.name)
         if let existing = saved.first(where: { $0.id == scooter.id }) {
-            savedScooter.nickname = existing.nickname
+            candidate.nickname = existing.nickname
         }
-        scooters.add(savedScooter)
-        saved = scooters.load()
-        connect(savedScooter)
+        // Remember it only after the full GATT setup succeeds. A failed pairing attempt must not
+        // become the scooter that startup keeps retrying.
+        pendingScooter = candidate
+        connect(candidate)
     }
 
-    public func connect(_ scooter: SavedScooter) {
-        connectedName = scooter.displayName
+    public func connect(_ saved: SavedScooter) {
+        if connectedID == saved.id, (phase != .idle || reconnecting) { return }
+        let pending = pendingScooter
+        if phase != .idle || reconnecting {
+            session.disconnect()
+            phase = .idle
+            reconnecting = false
+            recordingStopped()
+        }
+        // disconnect's callback clears transient target state; restore a newly selected candidate.
+        pendingScooter = pending
+        if connectedID != saved.id {
+            info = nil
+            vehicle = nil
+            lastHandlebar = nil
+            latest = [:]
+            series = [:]
+            lastReadingAt = 0
+            telemetryStale = false
+        }
+        connectedID = saved.id
+        connectedName = saved.displayName
         phase = .connecting
         recorder.setLink(ready: false)
-        session.connect(id: scooter.id, name: scooter.displayName)
+        session.connect(id: saved.id, name: saved.displayName)
         navigation.resetForNewLink()
     }
 
@@ -265,7 +320,14 @@ public final class RutaModel {
         session.disconnect()
         stopScan()
         phase = .idle
+        connectedID = nil
+        connectedName = nil
+        pendingScooter = nil
         recordingStopped()
+        if !ride.riding && !navigation.isNavigating { location.stop() }
+        #if os(iOS)
+        keepAwake(false)
+        #endif
     }
 
     public func refreshLive() {
@@ -281,7 +343,7 @@ public final class RutaModel {
     }
 
     public func forget(_ scooter: SavedScooter) {
-        if connectedName != nil { disconnect() }
+        if connectedID == scooter.id { disconnect() }
         scooters.remove(id: scooter.id)
         saved = scooters.load()
     }
@@ -322,7 +384,9 @@ public final class RutaModel {
     }
 
     public var latestSoc: Double? {
-        latest[MetricKey(pack: 0, metric: .soc)]?.value
+        if let total = freshValue(pack: 0, .soc) { return total }
+        let packs = (1...2).compactMap { freshValue(pack: $0, .soc) }
+        return packs.isEmpty ? nil : packs.reduce(0, +) / Double(packs.count)
     }
 
     public var range: RangeEstimate? {
@@ -336,25 +400,47 @@ public final class RutaModel {
 
     public var isConnected: Bool { phase == .ready }
     public var hasScooter: Bool { !saved.isEmpty }
+    public var activeSavedScooter: SavedScooter? {
+        guard let connectedID else { return nil }
+        return saved.first { $0.id == connectedID }
+    }
 
     public func reading(pack: Int, _ metric: Metric) -> Reading? {
-        latest[MetricKey(pack: pack, metric: metric)]
+        guard isFresh(latest[MetricKey(pack: pack, metric: metric)]) else { return nil }
+        return latest[MetricKey(pack: pack, metric: metric)]
     }
 
     public func value(pack: Int, _ metric: Metric) -> Double? {
-        latest[MetricKey(pack: pack, metric: metric)]?.value
+        reading(pack: pack, metric)?.value
+    }
+
+    private func freshValue(pack: Int, _ metric: Metric) -> Double? {
+        reading(pack: pack, metric)?.value
+    }
+
+    private func isFresh(_ reading: Reading?) -> Bool {
+        guard isConnected, let reading, reading.value.isFinite else { return false }
+        return now - reading.time <= 90_000
     }
 
     public func history(_ metric: Metric, pack: Int = 0, hours: Double = 6, buckets: Int = 120) -> [BucketPoint] {
         let key = MetricKey(pack: pack, metric: metric)
-        guard let values = series[key], let first = values.first, let last = values.last else { return [] }
-        let end = max(last.time, first.time + 1)
-        return RideMath.downsample(values, start: first.time, end: end, buckets: buckets)
+        guard let values = series[key], let last = values.last else { return [] }
+        let end = max(last.time, now)
+        let start = max(end - Int64(max(hours, 0.01) * 3_600_000), values.first?.time ?? end)
+        let window = values.filter { $0.time >= start && $0.time <= end }
+        return RideMath.downsample(window, start: start, end: end, buckets: buckets)
     }
 
     public var packs: [Int] {
-        let found = Set(latest.keys.map(\.pack))
+        let found = Set(latest.keys.map(\.pack)).filter { pack in
+            (0...2).contains { $0 == pack && reading(pack: pack, .soc) != nil }
+        }
         return found.sorted()
+    }
+
+    public var historyPacks: [Int] {
+        Set(series.keys.map(\.pack)).sorted()
     }
 
     public var packStates: [BmsState] {
@@ -372,6 +458,12 @@ public final class RutaModel {
     }
 
     public var speedUnit: String { unitMiles ? "mph" : "km/h" }
+
+    public func distanceValueText(_ metres: Double) -> String {
+        unitMiles
+            ? String(format: "%.1f", metres / 1609.344)
+            : String(format: "%.1f", metres / 1000)
+    }
 
     public func distanceText(_ metres: Double) -> String {
         unitMiles
@@ -392,6 +484,8 @@ public final class RutaModel {
     private func wireSession() {
         session.onStatus = { [weak self] text in self?.statusText = text }
         session.onLog = { _ in }
+        session.onBluetoothState = { [weak self] state in self?.bluetooth = state }
+        session.onPairing = { [weak self] pairing in self?.pairing = pairing }
         session.onDiscovered = { [weak self] scooter in
             guard let self else { return }
             if let index = self.discovered.firstIndex(where: { $0.id == scooter.id }) {
@@ -414,6 +508,11 @@ public final class RutaModel {
             self.reconnecting = false
             self.pairing = false
             self.recorder.setLink(ready: true)
+            if let pending = self.pendingScooter {
+                self.scooters.add(pending)
+                self.saved = self.scooters.load()
+                self.pendingScooter = nil
+            }
             self.location.start()
             self.connectivityAlert()
         }
@@ -422,11 +521,17 @@ public final class RutaModel {
             self.phase = .idle
             self.reconnecting = lost
             self.recorder.setLink(ready: false)
-            if lost {
+            // A brief link loss must not end the ride: RideSegmenter has a 120 s grace period and
+            // resumes the same ride if the link comes back. Intentional/terminal endings stop now.
+            if !lost {
                 self.recordingStopped()
-            } else {
-                self.recordingStopped()
-                self.location.stop()
+                self.connectedID = nil
+                self.connectedName = nil
+                self.pendingScooter = nil
+                self.info = nil
+                self.vehicle = nil
+                self.lastHandlebar = nil
+                if !self.ride.riding && !self.navigation.isNavigating { self.location.stop() }
             }
         }
         session.onHardControl = { [weak self] event in
@@ -442,21 +547,27 @@ public final class RutaModel {
             self.notify(AlertText.rideSaved(stored.ride))
         }
         recorder.onChargeChanged = { [weak self] session in
-            self?.ride.charging = session
+            guard let self else { return }
+            self.ride.charging = session
+            if session == nil { self.charges = self.activeChargeStore.load() }
         }
         recorder.onLog = { _ in }
     }
 
     private func restartLink() {
-        if session.phase != .idle { session.disconnect() }
+        if session.phase != .idle || session.reconnecting { session.disconnect() }
+        recorder.stop(now: now)
         phase = .idle
         reconnecting = false
+        statusText = "Not connected"
+        telemetryStale = false
         discovered = []
         stopScan()
         recorder = RideRecorder(
             store: demoMode ? demoRideStore : rideStore,
             chargeStore: demoMode ? demoChargeStore : chargeStore
         )
+        chargeWatch = ChargeWatch()
         wireRecorder()
         let next: ScooterTransport
         if demoMode {
@@ -469,6 +580,11 @@ public final class RutaModel {
             #endif
         }
         transport = next
+        #if os(iOS)
+        bluetooth = (next as? BluetoothScooterTransport)?.state ?? .unknown
+        #else
+        bluetooth = .poweredOn
+        #endif
         session = ScooterSession(transport: next)
         session.navigationEnabled = navigationEnabled
         wireSession()
@@ -476,10 +592,23 @@ public final class RutaModel {
         charges = activeChargeStore.load()
         latest = [:]
         series = [:]
+        lastReadingAt = 0
         ride = LiveRideState()
+        connectedID = nil
+        pendingScooter = nil
+        connectedName = nil
+        info = nil
+        vehicle = nil
+        lastHandlebar = nil
         if demoMode {
             seedDemoIfNeeded()
             rides = demoRideStore.load()
+            charges = demoChargeStore.load()
+            connect(SavedScooter(
+                id: FakeScooterTransport.demoID,
+                name: "HMC VX2",
+                nickname: "Demo VX2"
+            ))
         }
     }
 
@@ -500,14 +629,30 @@ public final class RutaModel {
         if values.count > 4_000 { values.removeFirst(values.count - 4_000) }
         series[key] = values
         lastReadingAt = max(lastReadingAt, reading.time)
-        if reading.pack == 0 && reading.metric == .soc {
-            recorder.soc(reading.value, at: reading.time)
+        if telemetryStale {
+            telemetryStale = false
+            statusText = "Connected · battery data live"
+        }
+        if reading.metric == .soc {
+            let freshPacks = (1...2).compactMap { pack -> Double? in
+                guard let value = latest[MetricKey(pack: pack, metric: .soc)],
+                      reading.time - value.time <= 90_000 else { return nil }
+                return value.value
+            }
+            let pack0 = latest[MetricKey(pack: 0, metric: .soc)]
+            let freshPack0 = pack0.flatMap { reading.time - $0.time <= 90_000 ? $0.value : nil }
+            let total = freshPack0
+                ?? (freshPacks.isEmpty ? nil : freshPacks.reduce(0, +) / Double(freshPacks.count))
+            recorder.soc(total, at: reading.time)
         }
     }
 
     private func accept(_ fix: GeoFix) {
-        recorder.fix(lat: fix.lat, lng: fix.lng, accuracyM: fix.accuracyM, speedKmh: fix.speedKmh, at: fix.time)
-        navigation.update(lat: fix.lat, lng: fix.lng)
+        let accepted = recorder.fix(
+            lat: fix.lat, lng: fix.lng, accuracyM: fix.accuracyM,
+            speedKmh: fix.speedKmh, at: fix.time
+        )
+        if accepted { navigation.update(fix: fix) }
         ride = recorder.state
     }
 
@@ -519,6 +664,7 @@ public final class RutaModel {
             riding: ride.riding,
             target: chargeTarget
         )
+        charges = activeChargeStore.load()
         guard let event, announceCharge else { return }
         switch event {
         case .reached(let percent):
@@ -530,7 +676,6 @@ public final class RutaModel {
         case .stopped(let percent):
             notify(AlertText.chargeStopped(percent: percent))
         }
-        charges = activeChargeStore.load()
     }
 
     private func connectivityAlert() {
@@ -545,10 +690,8 @@ public final class RutaModel {
     }
 
     private func recordingStopped() {
-        if ride.riding {
-            recorder.stop(now: now)
-            refreshRides()
-        }
+        recorder.stop(now: now)
+        refreshRides()
     }
 
     // MARK: - Navigation
@@ -581,12 +724,16 @@ public final class RutaModel {
 
     private func lookUpPlaces(_ stored: StoredRide) {
         let ride = stored.ride
+        let realMatch = rideStore.load().contains { $0.id == ride.id && $0.ride.start == ride.start }
+        let demoMatch = demoRideStore.load().contains { $0.id == ride.id && $0.ride.start == ride.start }
+        let store = realMatch ? rideStore : (demoMatch ? demoRideStore : activeRideStore)
+        let demo = demoMode
         Task { [weak self] in
             let start = await PlaceLookup.name(lat: ride.startLat, lng: ride.startLng)
             let end = await PlaceLookup.name(lat: ride.endLat, lng: ride.endLng)
             guard let self else { return }
-            _ = self.activeRideStore.updatePlaces(id: ride.id, start: start, end: end)
-            self.rides = self.activeRideStore.load()
+            _ = store.updatePlaces(id: ride.id, start: start, end: end)
+            if self.demoMode == demo { self.rides = store.load() }
         }
     }
 

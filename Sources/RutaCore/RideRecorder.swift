@@ -33,7 +33,7 @@ public struct LiveRideState: Equatable, Sendable {
 /// off, 2 min after the link drops, or 5 min at a standstill. Tracks keep moving points plus one
 /// point every 10 s when stopped, and a ride needs 200 m and a minute to be kept.
 public final class RideRecorder {
-    public static let freshFixMs: Int64 = 20_000
+    public static let freshFixMs: Int64 = 5_000
     public static let freshSocMs: Int64 = 90_000
     public static let recentMs: Int64 = 60_000
     public static let chargeSaveMs: Int64 = 60_000
@@ -42,11 +42,24 @@ public final class RideRecorder {
         var id: Int64
         var start: Int64
         var socStart: Double?
-        let track = RideAccumulator()
+        var track = RideAccumulator()
         var points: [RidePoint] = []
         var lastStoredAt: Int64 = 0
         var skipped: RidePoint?
         var startPlace: String?
+    }
+
+    private struct Checkpoint: Codable {
+        var hasRide: Bool
+        var id: Int64
+        var start: Int64
+        var socStart: Double?
+        var points: [RidePoint]
+        var lastStoredAt: Int64
+        var skipped: RidePoint?
+        var startPlace: String?
+        var charge: ChargeSession?
+        var savedAt: Int64
     }
 
     public let store: RideStore
@@ -70,10 +83,72 @@ public final class RideRecorder {
     private var lastChargeSaveAt: Int64 = 0
     private var chargingSaved = false
     private var lastSmoothedSpeed = 0.0
+    private var paused = false
+    private var lastCheckpointAt: Int64 = 0
 
     public init(store: RideStore, chargeStore: ChargeStore? = nil) {
         self.store = store
         self.chargeStore = chargeStore
+        restoreCheckpoint()
+    }
+
+    private var checkpointURL: URL {
+        store.url.deletingPathExtension().appendingPathExtension("open.json")
+    }
+
+    // MARK: - Checkpoint recovery
+
+    private func restoreCheckpoint() {
+        guard let data = try? Data(contentsOf: checkpointURL),
+              let checkpoint = try? JSONDecoder().decode(Checkpoint.self, from: data) else { return }
+        if store.load().contains(where: { $0.id == checkpoint.id }) {
+            try? FileManager.default.removeItem(at: checkpointURL)
+            return
+        }
+        if checkpoint.hasRide, checkpoint.id > 0 {
+            let points = checkpoint.points + (checkpoint.skipped.map { [$0] } ?? [])
+            active = Active(
+                id: checkpoint.id, start: checkpoint.start, socStart: checkpoint.socStart,
+                track: RideAccumulator.replay(points), points: checkpoint.points,
+                lastStoredAt: checkpoint.lastStoredAt, skipped: checkpoint.skipped,
+                startPlace: checkpoint.startPlace
+            )
+            segmenter.restoreRiding(startedAt: checkpoint.start)
+            state.riding = true
+        }
+        charges.restore(active: checkpoint.charge)
+        state.linkReady = linkReady
+        refresh(now: Int64(Date().timeIntervalSince1970 * 1000))
+        onLog?("Recovered an open ride/charge checkpoint from \(checkpoint.savedAt)")
+    }
+
+    private func saveCheckpoint(now: Int64) {
+        guard active != nil || charges.snapshot != nil else {
+            try? FileManager.default.removeItem(at: checkpointURL)
+            return
+        }
+        let checkpoint = Checkpoint(
+            hasRide: active != nil,
+            id: active?.id ?? 0, start: active?.start ?? now,
+            socStart: active?.socStart, points: active?.points ?? [],
+            lastStoredAt: active?.lastStoredAt ?? 0, skipped: active?.skipped,
+            startPlace: active?.startPlace, charge: charges.snapshot, savedAt: now
+        )
+        do {
+            let folder = checkpointURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            try encoder.encode(checkpoint).write(to: checkpointURL, options: .atomic)
+            lastCheckpointAt = now
+        } catch {
+            onLog?("Ride checkpoint failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func clearCheckpoint() {
+        try? FileManager.default.removeItem(at: checkpointURL)
+        lastCheckpointAt = 0
     }
 
     // MARK: - Inputs
@@ -97,10 +172,12 @@ public final class RideRecorder {
         soc = ValueAt(time: time, value: value)
     }
 
-    /// A filtered GPS fix. `now` should be the current wall clock in milliseconds.
-    public func fix(lat: Double, lng: Double, accuracyM: Double, speedKmh: Double?, at time: Int64) {
+    /// A filtered GPS fix. `now` should be the current wall clock in milliseconds. Returns true when
+    /// the fix passed the same accuracy/jump filter used for ride tracking.
+    @discardableResult
+    public func fix(lat: Double, lng: Double, accuracyM: Double, speedKmh: Double?, at time: Int64) -> Bool {
         let fix = GeoFix(time: time, lat: lat, lng: lng, accuracyM: accuracyM, speedKmh: speedKmh)
-        guard let step = filter.accept(fix) else { return }
+        guard let step = filter.accept(fix) else { return false }
         state.gps = .fix
         let speed = smoother.add(step.speedKmh)
         lastSmoothedSpeed = speed
@@ -109,10 +186,12 @@ public final class RideRecorder {
         recent.removeAll { time - $0.time > Self.recentMs }
         if active != nil { record(step) }
         refresh(now: time)
+        return true
     }
 
     /// Samples the inputs once a second. Safe to call more often.
     public func tick(now: Int64) {
+        guard !paused else { return }
         let fresh = recent.last.flatMap { now - $0.time <= Self.freshFixMs ? $0.step : nil }
         if fresh != nil {
             state.gps = .fix
@@ -132,15 +211,38 @@ public final class RideRecorder {
         }
         if let active, active.socStart == nil { self.active?.socStart = freshSoc }
         updateCharging(now: now, soc: freshSoc)
+        if active != nil || charges.snapshot != nil, now - lastCheckpointAt >= 10_000 {
+            saveCheckpoint(now: now)
+        }
         refresh(now: now)
     }
 
     /// Saves an active ride and charging session; used when the app leaves the foreground.
     public func stop(now: Int64) {
+        paused = false
         if case .ended(let time, let reason)? = segmenter.stop(now: now) {
             end(at: time, reason: reason, now: now)
         }
         if let charge = charges.stop() { saveCharge(charge, now: now, finished: true) }
+        finishRideCheckpoint(now: now)
+        refresh(now: now)
+    }
+
+    /// Keeps the same active ride across a foreground/background transition. No new ignition-on
+    /// ride is started until resume, and the existing ride is not fragmented.
+    public func pause(now: Int64) {
+        paused = true
+        segmenter.pause()
+        charges.pause(now: now)
+        saveCheckpoint(now: now)
+        refresh(now: now)
+    }
+
+    public func resume(now: Int64) {
+        paused = false
+        segmenter.resume(now: now)
+        charges.resume(now: now)
+        saveCheckpoint(now: now)
         refresh(now: now)
     }
 
@@ -179,12 +281,18 @@ public final class RideRecorder {
                 format: "Ride not saved: %.0f m (needs %.0f m and 1 min)",
                 ride.track.distanceM, RideMath.minRideM
             ))
+            finishRideCheckpoint(now: now)
             return
         }
         var stored = StoredRide(ride: summary, points: ride.points)
         stored.ride.startPlace = ride.startPlace
         store.add(stored)
+        guard store.load().contains(where: { $0.id == stored.id }) else {
+            onLog?("Ride save failed: storage could not be written")
+            return
+        }
         onSaved?(stored)
+        finishRideCheckpoint(now: now)
         onLog?(String(
             format: "Ride saved: %.1f km in %@, peak %.0f km/h, avg %.0f km/h (%@)",
             summary.distanceKm, RideMath.formatDuration(seconds: summary.durationS),
@@ -192,9 +300,13 @@ public final class RideRecorder {
         ))
     }
 
+    private func finishRideCheckpoint(now: Int64) {
+        if charges.snapshot == nil { clearCheckpoint() } else { saveCheckpoint(now: now) }
+    }
+
     /// Fills the place names after the tracker has looked them up.
     public func setPlaces(id: Int64, start: String?, end: String?) {
-        store.updatePlaces(id: id, start: start, end: end)
+        _ = store.updatePlaces(id: id, start: start, end: end)
     }
 
     // MARK: - Charging
@@ -228,9 +340,14 @@ public final class RideRecorder {
         }
         all.sort { $0.start > $1.start }
         chargeStore.save(all)
+        guard chargeStore.load().contains(where: { $0.start == session.start }) else {
+            onLog?("Charging session save failed: storage could not be written")
+            return
+        }
         if finished {
             chargingSaved = false
             onLog?("Charging session saved: \(Int(session.socStart)) % → \(Int(session.socEnd)) %")
+            if active == nil { clearCheckpoint() }
         }
     }
 

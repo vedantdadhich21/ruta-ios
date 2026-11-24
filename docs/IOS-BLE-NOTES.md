@@ -32,8 +32,10 @@ before the session uses it.
 
 Android calls `createBond()` and answers the pairing request with the PIN. iOS has no bond API and
 no bond-state callback. The system PIN sheet appears only when an operation requires encryption.
-The transport therefore does a read of a likely-protected characteristic when the required four are
-missing, then retries discovery after 1.5 s and again after 10 s (the sheet may be on screen).
+The transport therefore reads a likely-protected characteristic when the required four are
+missing. A pairing-class ATT error keeps the pairing episode alive; rediscovery runs with backoff
+until the 75-second probe watchdog (the session allows 90 seconds). A successful protected read or
+a complete post-pair table ends the episode.
 
 The official My VIDA iOS app is the practical way to create the bond: pair the scooter there once,
 close it, then Ruta connects to the already-bonded peripheral. Bonds are system-wide, not per app.
@@ -47,10 +49,13 @@ shows whether the cache is stale or the device is presenting less.
 
 ## What Diagnostics records
 
-Every service (8-char prefix) with each characteristic (4-char prefix) and its properties
-(`r`/`w`/`W`/`n`/`i`), plus discovery, read, write and notify errors. The link's Stage A/B statuses
-follow. That is enough to tell apart "iOS cannot see it", "the read failed for encryption" and "the
-TCU is not answering".
+Every service's full UUID and primary flag, every include edge, every characteristic's full UUID,
+instance ordinal and properties (`r`/`w`/`W`/`n`/`i`/`N`/`I`), the selected instance for each
+required UUID, cached service count before discovery, write payload limits, and exact
+discovery/read/write/notify errors with service UUID and ATT/CoreBluetooth domain/code. The file is
+append-only, size-bounded and written off the main thread; each process session records its build
+and commit. Stage A/B statuses follow. That is enough to tell apart "iOS cannot see it", "the read
+failed for encryption" and "the TCU is not answering".
 
 ## Known unknowns
 

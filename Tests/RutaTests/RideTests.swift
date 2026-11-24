@@ -112,6 +112,25 @@ func runRideMath() {
     _ = d.update(now: t0 + 376_000, linkReady: true, ignitionOn: false, speedKmh: nil)
     check(d.update(now: t0 + 377_000, linkReady: true, ignitionOn: true, speedKmh: nil) == .started(time: t0 + 377_000, byIgnition: true), "ignition after off")
 
+    let paused = RideSegmenter()
+    _ = paused.update(now: t0, linkReady: true, ignitionOn: true, speedKmh: 0)
+    paused.pause()
+    check(paused.update(now: t0 + 5_000, linkReady: true, ignitionOn: true, speedKmh: 0) == nil && paused.riding,
+          "background pause neither ends nor restarts the active ride")
+    paused.resume(now: t0 + 10_000)
+    check(paused.update(now: t0 + 11_000, linkReady: true, ignitionOn: true, speedKmh: 0) == nil && paused.riding,
+          "resume continues the same ride")
+    check(paused.stop(now: t0 + 12_000) == .ended(time: t0 + 12_000, reason: .stopped), "paused ride can still be stopped")
+
+    let charge = ChargeDetector()
+    _ = charge.update(now: t0, soc: 50, linkReady: true, riding: false)
+    _ = charge.update(now: t0 + 360_000, soc: 52, linkReady: true, riding: false)
+    check(charge.active != nil, "charge session active before pause")
+    charge.pause(now: t0 + 360_000)
+    charge.resume(now: t0 + 1_560_000)
+    check(charge.update(now: t0 + 1_561_000, soc: 52, linkReady: true, riding: false) == nil && charge.active != nil,
+          "background pause does not create a false charging-stop event")
+
     // Ride summary.
     let track = RideAccumulator()
     let points = sampleRide().map { track.add($0) }
